@@ -221,8 +221,8 @@ func getIdempotentResolution(ctx context.Context, transaction *sql.Tx, tenantID,
 func insertOutboxEvent(ctx context.Context, transaction *sql.Tx, event outbox.Event) error {
 	if _, err := transaction.ExecContext(ctx, `
 		INSERT INTO broker_outbox (
-			id, tenant_id, aggregate_type, aggregate_id, event_type, payload, occurred_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			id, tenant_id, aggregate_type, aggregate_id, event_type, payload, occurred_at, available_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
 		event.ID, event.TenantID, event.AggregateType, event.AggregateID,
 		event.Type, string(event.Payload), event.OccurredAt,
 	); err != nil {
