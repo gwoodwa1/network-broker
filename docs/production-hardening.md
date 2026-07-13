@@ -18,6 +18,7 @@ This document defines deployment requirements. Passing unit tests does not make 
 - Treat post-quantum signatures and long-lived data confidentiality as separate migrations. Qualify standardized providers, message-size limits, latency and failure behaviour before requiring a new algorithm in production.
 - Configure `KMSEncryptionProvider` by tenant and purpose. Align the resolved ARN with S3 SSE-KMS configuration or enforce an equivalent bucket policy; recording an ARN in metadata alone does not encrypt an object.
 - Deny key deletion, alias changes and policy changes outside a dual-controlled administrative path. Alert on disabled keys, unexpected ARN resolution and verification failures.
+- Execute and retain evidence from the [key rotation runbook](key-rotation.md) before production activation or retirement.
 
 ## Policy and approvals
 
@@ -44,6 +45,7 @@ This document defines deployment requirements. Passing unit tests does not make 
 - Run collectors without root privileges, with a read-only filesystem, a minimal network egress allowlist and no access to control-plane signing credentials.
 - Set CPU, memory, process, connection and concurrency limits. Alert on repeated bounded-response failures as potential device or denial-of-service events.
 - Export secret-safe structured logs and audit events to a separately administered, retention-controlled sink.
+- Record and continuously verify the deployment-specific [JetStream delivery contract](jetstream-operations.md), including duplicate window, retention, limits and durable-consumer recovery behavior.
 
 ## Adversarial device output
 

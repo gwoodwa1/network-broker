@@ -22,6 +22,10 @@ const (
 	ResolutionExpired          ResolutionState = "expired"
 )
 
+// IdempotencyConflictCode is the stable machine-readable API code for a key
+// reused with request content that differs from the original request.
+const IdempotencyConflictCode = "IDEMPOTENCY_KEY_REUSED"
+
 var (
 	ErrNotFound            = errors.New("resolution not found")
 	ErrVersionConflict     = errors.New("resolution version conflict")
