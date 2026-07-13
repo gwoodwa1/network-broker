@@ -1,0 +1,12 @@
+DROP TRIGGER IF EXISTS broker_approval_consumptions_append_only ON broker_approval_consumptions;
+DROP TRIGGER IF EXISTS broker_policy_decisions_append_only ON broker_policy_decisions;
+DROP TRIGGER IF EXISTS broker_policy_activation_events_append_only ON broker_policy_activation_events;
+DROP TRIGGER IF EXISTS broker_policy_bundles_immutable ON broker_policy_bundles;
+DROP FUNCTION IF EXISTS broker_reject_governance_history_mutation();
+DROP TABLE IF EXISTS broker_approval_consumptions;
+DROP TABLE IF EXISTS broker_approval_grants;
+DROP INDEX IF EXISTS broker_policy_decisions_tenant_time_idx;
+DROP TABLE IF EXISTS broker_policy_decisions;
+DROP TABLE IF EXISTS broker_policy_activation_events;
+DROP TABLE IF EXISTS broker_policy_activations;
+DROP TABLE IF EXISTS broker_policy_bundles;

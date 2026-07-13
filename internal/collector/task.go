@@ -42,6 +42,7 @@ type Task struct {
 	TargetSnapshotID    string
 	TargetSnapshotHash  string
 	TargetID            string
+	TargetEndpoint      string
 	RecipeID            string
 	RecipeVersion       string
 	TriggerDecisionID   string

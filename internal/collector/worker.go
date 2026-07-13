@@ -157,7 +157,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	executionCtx, cancel := context.WithTimeout(ctx, authorization.MaximumDuration)
 	defer cancel()
 	captured, err := w.Transport.Execute(executionCtx, transport.TargetConnection{
-		TargetID: task.TargetID, CredentialToken: credential.Token,
+		TargetID: task.TargetID, Endpoint: task.TargetEndpoint, CredentialToken: credential.Token,
 		CredentialExpiry: credential.ExpiresAt, CredentialClass: credential.CredentialClass,
 	}, transport.BoundedOperation{
 		RecipeID:        task.RecipeID,
