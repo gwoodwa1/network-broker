@@ -50,7 +50,7 @@ type CredentialExchanger interface {
 // Worker executes one bounded task attempt.
 type Worker struct {
 	ID              string
-	Tasks           *Store
+	Tasks           TaskRepository
 	Transport       transport.Adapter
 	Sink            CapturedSink
 	Authorizer      ExecutionAuthorizer
@@ -79,14 +79,14 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		now = w.Now
 	}
 
-	lease, err := w.Tasks.Acquire(taskID, w.ID, now(), w.LeaseDuration)
+	lease, err := w.Tasks.AcquireContext(ctx, taskID, w.ID, now(), w.LeaseDuration)
 	if err != nil {
 		return err
 	}
-	if err := w.Tasks.StartExecution(taskID, w.ID, lease.FencingToken, now()); err != nil {
+	if err := w.Tasks.StartExecutionContext(ctx, taskID, w.ID, lease.FencingToken, now()); err != nil {
 		return err
 	}
-	task, err := w.Tasks.Get(taskID)
+	task, err := w.Tasks.GetContext(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -133,10 +133,11 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return w.failAttempt(taskID, lease, now(), fmt.Errorf("issue execution grant for task %q: %w", taskID, err))
 	}
-	if err := w.Tasks.RecordExecutionAuthority(taskID, w.ID, lease.FencingToken, authorization.DecisionID, grant.GrantID, now()); err != nil {
+	if err := w.Tasks.RecordExecutionAuthorityContext(ctx, taskID, w.ID, lease.FencingToken,
+		authorization.DecisionID, grant.GrantID, now()); err != nil {
 		return err
 	}
-	task, err = w.Tasks.Get(taskID)
+	task, err = w.Tasks.GetContext(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -177,17 +178,18 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return w.failAttempt(taskID, lease, now(), fmt.Errorf("persist captured evidence for task %q: %w", taskID, err))
 	}
-	if err := w.Tasks.BeginCommit(taskID, w.ID, lease.FencingToken, now()); err != nil {
+	if err := w.Tasks.BeginCommitContext(ctx, taskID, w.ID, lease.FencingToken, now()); err != nil {
 		return err
 	}
-	if err := w.Tasks.Commit(taskID, w.ID, lease.FencingToken, attemptID, evidenceID, now()); err != nil {
+	if err := w.Tasks.CommitContext(ctx, taskID, w.ID, lease.FencingToken, attemptID, evidenceID, now()); err != nil {
 		return fmt.Errorf("commit task %q: %w", taskID, err)
 	}
 	return nil
 }
 
 func (w Worker) failAttempt(taskID string, lease Lease, failedAt time.Time, cause error) error {
-	if retryErr := w.Tasks.Retry(taskID, w.ID, lease.FencingToken, failedAt, cause); retryErr != nil {
+	if retryErr := w.Tasks.RetryContext(context.Background(), taskID, w.ID, lease.FencingToken,
+		failedAt, cause); retryErr != nil {
 		return errors.Join(cause, fmt.Errorf("return task %q to retry wait: %w", taskID, retryErr))
 	}
 

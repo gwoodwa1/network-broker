@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -70,6 +71,19 @@ type Lease struct {
 	ExpiresAt    time.Time
 }
 
+// TaskRepository is the complete authoritative task boundary used by a
+// collector worker. Context-aware operations allow durable implementations to
+// cancel database work when an attempt is stopped.
+type TaskRepository interface {
+	AcquireContext(context.Context, string, string, time.Time, time.Duration) (Lease, error)
+	StartExecutionContext(context.Context, string, string, int64, time.Time) error
+	RecordExecutionAuthorityContext(context.Context, string, string, int64, string, string, time.Time) error
+	BeginCommitContext(context.Context, string, string, int64, time.Time) error
+	CommitContext(context.Context, string, string, int64, string, string, time.Time) error
+	RetryContext(context.Context, string, string, int64, time.Time, error) error
+	GetContext(context.Context, string) (Task, error)
+}
+
 // Store provides the atomic task operations that a durable job-state adapter
 // must preserve. The in-memory implementation is intended for local builds and
 // tests; its compare-and-set semantics map directly to a database transaction.
@@ -80,6 +94,46 @@ type Store struct {
 
 func NewStore() *Store {
 	return &Store{tasks: make(map[string]*Task)}
+}
+
+func (s *Store) AcquireContext(_ context.Context, taskID, owner string, now time.Time,
+	duration time.Duration,
+) (Lease, error) {
+	return s.Acquire(taskID, owner, now, duration)
+}
+
+func (s *Store) StartExecutionContext(_ context.Context, taskID, owner string, token int64,
+	now time.Time,
+) error {
+	return s.StartExecution(taskID, owner, token, now)
+}
+
+func (s *Store) RecordExecutionAuthorityContext(_ context.Context, taskID, owner string, token int64,
+	decisionID, grantID string, now time.Time,
+) error {
+	return s.RecordExecutionAuthority(taskID, owner, token, decisionID, grantID, now)
+}
+
+func (s *Store) BeginCommitContext(_ context.Context, taskID, owner string, token int64,
+	now time.Time,
+) error {
+	return s.BeginCommit(taskID, owner, token, now)
+}
+
+func (s *Store) CommitContext(_ context.Context, taskID, owner string, token int64,
+	attemptID, evidenceID string, now time.Time,
+) error {
+	return s.Commit(taskID, owner, token, attemptID, evidenceID, now)
+}
+
+func (s *Store) RetryContext(_ context.Context, taskID, owner string, token int64,
+	now time.Time, cause error,
+) error {
+	return s.Retry(taskID, owner, token, now, cause)
+}
+
+func (s *Store) GetContext(_ context.Context, taskID string) (Task, error) {
+	return s.Get(taskID)
 }
 
 // Add queues a task. Existing IDs are rejected so task creation is explicit.
