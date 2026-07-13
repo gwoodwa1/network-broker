@@ -130,3 +130,11 @@ The prototype is built around several explicit constraints:
 - Every retrieval is independently authorized for the current actor and produces a receipt.
 
 These controls reduce duplicate contact and unauthorized disclosure, but they do not claim exactly-once device interaction. The authoritative task store accepts only one current fenced result.
+
+## Security
+
+This is an early-stage prototype and is not ready for production network access. Please report suspected vulnerabilities privately as described in [SECURITY.md](SECURITY.md); do not disclose security issues through a public issue.
+
+## License
+
+This project is available under the [MIT License](LICENSE.md). It is provided without warranty, including without warranties of merchantability, fitness for a particular purpose, or non-infringement.
