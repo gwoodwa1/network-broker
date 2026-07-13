@@ -38,6 +38,7 @@ This model covers the gateway, policy and approval services, resolution state, c
 | Device impersonation | gNMI requires TLS 1.3, explicit roots and hostname verification; SSH and NETCONF require a non-nil verified host-key callback | Compromised trust root, incorrect known-host provisioning or first-use trust outside the broker |
 | Oversized or hanging response | Enforce policy and recipe duration/byte limits, gRPC receive limits, bounded NETCONF framing and bounded SSH streams | Protocol-library or decompression amplification below the application boundary |
 | Evidence or policy tampering | Content digests, immutable metadata, signed envelopes, immutable signed bundles and append-only decisions/events | Database administrator or KMS administrator collusion; external ledger export remains future work |
+| Disclosure receipt tampering or signature stripping | Bind tenant, actor, evidence, policy lineage and delivered-payload digest into a domain-separated signature set; enforce minimum and required-algorithm verification policy | Durable receipt repository and external transparency anchoring remain future work |
 | Cross-tenant read | Include tenant in every durable lookup and make cross-tenant absence indistinguishable from missing | Query introduced without tenant predicate |
 | Signing alias rotation invalidates history | Resolve aliases to immutable KMS key ARNs before signing and persist that ARN with the signature | Deleting historical KMS keys before evidence retention expires |
 | Unsafe deletion | Separate immutable metadata from versioned lifecycle state; block deletion during retention or legal hold; require request and confirmation transitions | External object-deletion worker is not yet implemented |
@@ -59,6 +60,7 @@ This model covers the gateway, policy and approval services, resolution state, c
 - Production SPIRE deployment, CA operations and recovery exercises.
 - Vendor lab qualification for every supported gNMI, NETCONF and SSH implementation.
 - Tamper-evident external audit-ledger export.
+- Standardized post-quantum signing-provider qualification and formal algorithm creation/retirement policy.
 - The lifecycle deletion and orphan-reconciliation worker.
 
 Review this model whenever a protocol recipe, identity convention, policy schema, durable store or trust root changes.

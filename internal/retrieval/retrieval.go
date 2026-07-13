@@ -59,7 +59,7 @@ func (s Service) RetrieveNormalised(ctx context.Context, request Request) (Resul
 		}
 		selected[field] = value
 	}
-	delivered, receipt, err := s.Disclosure.Deliver(request.DecisionID, request.ActorID, request.TenantID,
+	delivered, receipt, err := s.Disclosure.DeliverContext(ctx, request.DecisionID, request.ActorID, request.TenantID,
 		request.EvidenceID, request.RequestID, "normalised", selected, request.Redactions)
 	if err != nil {
 		return Result{}, err

@@ -14,6 +14,8 @@ This document defines deployment requirements. Passing unit tests does not make 
 
 - Configure `KMSSigningProvider` by purpose using aliases, but grant signing permission only to the intended workload. The provider records immutable key ARNs in signed objects.
 - Retain disabled historical signing keys for verification until every dependent evidence and audit retention period has expired. Test rotation and recovery before deployment.
+- Configure signature-set policy independently for creation and verification. During a dual-signing migration, require every mandated algorithm and reject stripped, duplicate, unknown or invalid signature entries.
+- Treat post-quantum signatures and long-lived data confidentiality as separate migrations. Qualify standardized providers, message-size limits, latency and failure behaviour before requiring a new algorithm in production.
 - Configure `KMSEncryptionProvider` by tenant and purpose. Align the resolved ARN with S3 SSE-KMS configuration or enforce an equivalent bucket policy; recording an ARN in metadata alone does not encrypt an object.
 - Deny key deletion, alias changes and policy changes outside a dual-controlled administrative path. Alert on disabled keys, unexpected ARN resolution and verification failures.
 

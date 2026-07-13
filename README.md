@@ -154,7 +154,7 @@ Dead-letter inspection and replay are available through a separately authorised 
 
 The evidence pipeline now accepts a tenant-aware artefact storage interface. The reference memory store remains available for deterministic local workflows, while `DurableStore` composes immutable PostgreSQL lineage metadata with an S3-compatible blob adapter. Artefact records have stable idempotent identifiers; object keys are tenant-encoded and content-addressed by SHA-256. Reads enforce the recorded byte count and recompute the digest before returning any bytes. Migration `000004_artefact_metadata` makes metadata append-only and enforces captured-to-sanitised parentage within a tenant. Migration `000005_artefact_lifecycle` adds versioned retention, legal-hold and deletion state with an append-only event ledger. Evidence and execution grants use opaque signing-key references that remain verifiable across rotation, and artefact capture resolves tenant-specific opaque encryption-key references. See the [durable artefact storage contract](docs/artefact-storage.md).
 
-Signed, immutable policy bundles can be activated by scope and evaluated with complete input and bundle-digest provenance. Policy decisions and activation history are append-only. Approval grants are durable, tenant- and target-bound, expiring and transactionally consumed. The local evaluator remains only a deterministic scaffold.
+Signed, immutable policy bundles can be activated by scope and evaluated with complete input and bundle-digest provenance. Policy decisions and activation history are append-only. Approval grants are durable, tenant- and target-bound, expiring and transactionally consumed. Disclosure receipts bind the tenant, actor, evidence, policy lineage and exact delivered-payload digest in a domain-separated signature set. Signature policy can require multiple independently referenced keys during an algorithm migration. The local evaluator remains only a deterministic scaffold.
 
 Read-only gNMI, NETCONF and SSH adapters enforce exact catalogue recipe versions, short-lived opaque credential exchange, deadlines and byte bounds. gNMI requires TLS 1.3 with explicit roots and hostname verification; NETCONF and SSH require verified SSH host keys. See [transport security](docs/transport-security.md), the [threat model](docs/threat-model.md) and [production hardening](docs/production-hardening.md).
 
@@ -167,6 +167,7 @@ This repository is a security-oriented prototype, not a production service. Impo
 - Vendor/release lab qualification and production runtime wiring for the gNMI, NETCONF and SSH adapters.
 - Production activation and administration surfaces for signed policy bundles and approvals.
 - SPIRE deployment, external credential-broker runtime integration and non-AWS HSM/KMS adapters.
+- Durable disclosure-receipt persistence, formal algorithm lifecycle policy and experimental standardized post-quantum providers.
 - Tracing, audit-ledger export, resilience testing, dashboards, alerts, and rollout controls.
 - An independent security assessment; the repository includes a [review package](docs/security-review-package.md) but self-review does not satisfy this requirement.
 
@@ -182,7 +183,7 @@ The prototype is built around several explicit constraints:
 - An execution grant is signed, short-lived, and bound to one collector and operation.
 - Captured bytes are never silently overwritten by sanitised data.
 - Evidence is signed only for the current fenced attempt with complete lineage.
-- Every retrieval is independently authorized for the current actor and produces a receipt.
+- Every retrieval is independently authorized for the current actor and produces a signed, payload-bound receipt.
 
 These controls reduce duplicate contact and unauthorized disclosure, but they do not claim exactly-once device interaction. The authoritative task store accepts only one current fenced result.
 

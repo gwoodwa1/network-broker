@@ -1,6 +1,9 @@
 package disclosure
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +11,15 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"network_broker/internal/cryptosign"
+	"network_broker/internal/keyprovider"
+)
+
+const (
+	receiptSchemaVersion  = "network-broker-disclosure-receipt/v1"
+	receiptSigningPurpose = "disclosure-receipt"
+	receiptSigningDomain  = "disclosure-receipt/v1"
 )
 
 type Decision struct {
@@ -25,16 +37,21 @@ type Decision struct {
 }
 
 type Receipt struct {
+	SchemaVersion          string
 	ReceiptID              string
+	TenantID               string
 	EvidenceID             string
 	ActorID                string
 	DisclosureDecisionID   string
+	PolicyBundleDigest     string
+	PolicyInputDigest      string
 	Representation         string
 	FieldsDelivered        []string
 	RedactionsApplied      []string
 	DeliveredPayloadDigest string
 	RequestID              string
 	DeliveredAt            time.Time
+	SignatureSet           cryptosign.Set
 }
 
 type DecisionRequest struct {
@@ -49,16 +66,37 @@ type Service struct {
 	decisions map[string]*Decision
 	receipts  map[string]*Receipt
 	now       func() time.Time
+	signing   *cryptosign.Manager
 	sequence  uint64
 }
 
 func NewService() *Service { return NewServiceWithClock(time.Now) }
 
 func NewServiceWithClock(now func() time.Time) *Service {
+	manager, err := localSigningManager()
+	if err != nil {
+		panic(fmt.Sprintf("create local disclosure signing manager: %v", err))
+	}
+	service, err := NewServiceWithSigning(now, manager)
+	if err != nil {
+		panic(fmt.Sprintf("create disclosure service: %v", err))
+	}
+	return service
+}
+
+// NewServiceWithSigning constructs a disclosure service whose receipts are
+// signed through opaque providers. The manager may require multiple
+// signatures during an algorithm migration.
+func NewServiceWithSigning(now func() time.Time, signing *cryptosign.Manager) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{decisions: make(map[string]*Decision), receipts: make(map[string]*Receipt), now: now}
+	if signing == nil {
+		return nil, fmt.Errorf("signature manager is required")
+	}
+	return &Service{
+		decisions: make(map[string]*Decision), receipts: make(map[string]*Receipt), now: now, signing: signing,
+	}, nil
 }
 
 // Evaluate stores a fresh actor- and evidence-specific disclosure decision.
@@ -99,16 +137,76 @@ func (s *Service) EvaluateDecision(actorID, evidenceID, representation string, p
 
 // Deliver enforces the stored decision and records the exact released payload.
 func (s *Service) Deliver(decisionID, actorID, tenantID, evidenceID, requestID, representation string, fields map[string]string, redactions []string) (map[string]string, *Receipt, error) {
+	return s.DeliverContext(context.Background(), decisionID, actorID, tenantID, evidenceID, requestID, representation, fields, redactions)
+}
+
+// DeliverContext enforces disclosure and signs the receipt without detaching
+// KMS or HSM work from the caller's cancellation and deadline.
+func (s *Service) DeliverContext(ctx context.Context, decisionID, actorID, tenantID, evidenceID, requestID, representation string, fields map[string]string, redactions []string) (map[string]string, *Receipt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if decisionID == "" || actorID == "" || tenantID == "" || evidenceID == "" || requestID == "" || representation == "" || len(fields) == 0 {
 		return nil, nil, fmt.Errorf("decision, actor, tenant, evidence, request, representation and fields are required")
 	}
 	now := s.now().UTC()
+	decision, ok := s.decisionForDelivery(decisionID)
+	if !ok {
+		return nil, nil, fmt.Errorf("disclosure decision %q not found", decisionID)
+	}
+	delivered, fieldNames, err := validateDelivery(decision, now, actorID, tenantID, evidenceID, representation, fields, redactions)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := json.Marshal(delivered)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode delivered payload: %w", err)
+	}
+	digest := sha256.Sum256(payload)
+	s.mu.Lock()
+	s.sequence++
+	receiptID := fmt.Sprintf("receipt-%s-%d", decision.EvidenceID, s.sequence)
+	s.mu.Unlock()
+	receipt := &Receipt{
+		SchemaVersion: receiptSchemaVersion, ReceiptID: receiptID, TenantID: decision.TenantID,
+		EvidenceID: decision.EvidenceID, ActorID: decision.ActorID, DisclosureDecisionID: decision.DecisionID,
+		PolicyBundleDigest: decision.PolicyBundleDigest, PolicyInputDigest: decision.PolicyInputDigest,
+		Representation:  representation,
+		FieldsDelivered: fieldNames, RedactionsApplied: uniqueSorted(redactions), DeliveredPayloadDigest: hex.EncodeToString(digest[:]),
+		RequestID: requestID, DeliveredAt: now,
+	}
+	canonical, err := canonicalReceipt(*receipt)
+	if err != nil {
+		return nil, nil, err
+	}
+	receipt.SignatureSet, err = s.signing.Sign(ctx, receiptSigningPurpose, receiptSigningDomain, canonical)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sign disclosure receipt: %w", err)
+	}
+	storedReceipt := cloneReceipt(receipt)
+	s.mu.Lock()
+	s.receipts[receipt.ReceiptID] = &storedReceipt
+	s.mu.Unlock()
+	receiptCopy := cloneReceipt(receipt)
+	return delivered, &receiptCopy, nil
+}
+
+func (s *Service) decisionForDelivery(decisionID string) (Decision, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	decision, ok := s.decisions[decisionID]
 	if !ok {
-		return nil, nil, fmt.Errorf("disclosure decision %q not found", decisionID)
+		return Decision{}, false
 	}
+	decisionCopy := *decision
+	decisionCopy.PermittedFields = append([]string(nil), decision.PermittedFields...)
+	decisionCopy.RequiredRedactions = append([]string(nil), decision.RequiredRedactions...)
+	return decisionCopy, true
+}
+
+func validateDelivery(decision Decision, now time.Time, actorID, tenantID, evidenceID, representation string,
+	fields map[string]string, redactions []string,
+) (delivered map[string]string, fieldNames []string, err error) {
 	if !now.Before(decision.ExpiresAt) {
 		return nil, nil, fmt.Errorf("disclosure decision is expired")
 	}
@@ -119,8 +217,8 @@ func (s *Service) Deliver(decisionID, actorID, tenantID, evidenceID, requestID, 
 		return nil, nil, fmt.Errorf("representation is not permitted")
 	}
 	permitted := stringSet(decision.PermittedFields)
-	delivered := make(map[string]string, len(fields))
-	fieldNames := make([]string, 0, len(fields))
+	delivered = make(map[string]string, len(fields))
+	fieldNames = make([]string, 0, len(fields))
 	for field, value := range fields {
 		if _, ok := permitted[field]; !ok {
 			return nil, nil, fmt.Errorf("field %q is not permitted", field)
@@ -135,23 +233,23 @@ func (s *Service) Deliver(decisionID, actorID, tenantID, evidenceID, requestID, 
 		}
 	}
 	sort.Strings(fieldNames)
-	payload, err := json.Marshal(delivered)
+	return delivered, fieldNames, nil
+}
+
+// VerifyReceipt validates the canonical receipt and the configured signature
+// policy, including dual-signature requirements during migrations.
+func (s *Service) VerifyReceipt(ctx context.Context, receipt Receipt) error {
+	if s == nil || s.signing == nil {
+		return fmt.Errorf("disclosure signature manager is required")
+	}
+	canonical, err := canonicalReceipt(receipt)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encode delivered payload: %w", err)
+		return err
 	}
-	digest := sha256.Sum256(payload)
-	s.sequence++
-	receipt := &Receipt{
-		ReceiptID: fmt.Sprintf("receipt-%s-%d", decision.EvidenceID, s.sequence), EvidenceID: decision.EvidenceID,
-		ActorID: decision.ActorID, DisclosureDecisionID: decision.DecisionID, Representation: representation,
-		FieldsDelivered: fieldNames, RedactionsApplied: uniqueSorted(redactions), DeliveredPayloadDigest: hex.EncodeToString(digest[:]),
-		RequestID: requestID, DeliveredAt: now,
+	if err := s.signing.Verify(ctx, receiptSigningDomain, canonical, receipt.SignatureSet); err != nil {
+		return fmt.Errorf("disclosure receipt signature is invalid: %w", err)
 	}
-	s.receipts[receipt.ReceiptID] = receipt
-	receiptCopy := *receipt
-	receiptCopy.FieldsDelivered = append([]string(nil), receipt.FieldsDelivered...)
-	receiptCopy.RedactionsApplied = append([]string(nil), receipt.RedactionsApplied...)
-	return delivered, &receiptCopy, nil
+	return nil
 }
 
 // RecordDelivery validates the legacy field-only delivery shape.
@@ -186,4 +284,71 @@ func stringSet(values []string) map[string]struct{} {
 		}
 	}
 	return set
+}
+
+func canonicalReceipt(receipt Receipt) ([]byte, error) {
+	if receipt.SchemaVersion != receiptSchemaVersion || receipt.ReceiptID == "" || receipt.TenantID == "" ||
+		receipt.EvidenceID == "" || receipt.ActorID == "" || receipt.DisclosureDecisionID == "" ||
+		receipt.PolicyBundleDigest == "" || receipt.PolicyInputDigest == "" || receipt.Representation == "" ||
+		len(receipt.FieldsDelivered) == 0 || receipt.DeliveredPayloadDigest == "" || receipt.RequestID == "" ||
+		receipt.DeliveredAt.IsZero() {
+		return nil, fmt.Errorf("disclosure receipt identity, lineage and delivery fields are required")
+	}
+	fields := append([]string(nil), receipt.FieldsDelivered...)
+	redactions := append([]string(nil), receipt.RedactionsApplied...)
+	sort.Strings(fields)
+	sort.Strings(redactions)
+	payload := struct {
+		SchemaVersion          string   `json:"schema_version"`
+		ReceiptID              string   `json:"receipt_id"`
+		TenantID               string   `json:"tenant_id"`
+		EvidenceID             string   `json:"evidence_id"`
+		ActorID                string   `json:"actor_id"`
+		DisclosureDecisionID   string   `json:"disclosure_decision_id"`
+		PolicyBundleDigest     string   `json:"policy_bundle_digest"`
+		PolicyInputDigest      string   `json:"policy_input_digest"`
+		Representation         string   `json:"representation"`
+		FieldsDelivered        []string `json:"fields_delivered"`
+		RedactionsApplied      []string `json:"redactions_applied"`
+		DeliveredPayloadDigest string   `json:"delivered_payload_digest"`
+		RequestID              string   `json:"request_id"`
+		DeliveredAt            string   `json:"delivered_at"`
+	}{
+		SchemaVersion: receipt.SchemaVersion, ReceiptID: receipt.ReceiptID, TenantID: receipt.TenantID,
+		EvidenceID: receipt.EvidenceID, ActorID: receipt.ActorID, DisclosureDecisionID: receipt.DisclosureDecisionID,
+		PolicyBundleDigest: receipt.PolicyBundleDigest, PolicyInputDigest: receipt.PolicyInputDigest,
+		Representation: receipt.Representation, FieldsDelivered: fields, RedactionsApplied: redactions,
+		DeliveredPayloadDigest: receipt.DeliveredPayloadDigest, RequestID: receipt.RequestID,
+		DeliveredAt: receipt.DeliveredAt.UTC().Format(time.RFC3339Nano),
+	}
+	canonical, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode canonical disclosure receipt: %w", err)
+	}
+	return canonical, nil
+}
+
+func cloneReceipt(receipt *Receipt) Receipt {
+	clone := *receipt
+	clone.FieldsDelivered = append([]string(nil), receipt.FieldsDelivered...)
+	clone.RedactionsApplied = append([]string(nil), receipt.RedactionsApplied...)
+	clone.SignatureSet.Signatures = append([]cryptosign.Entry(nil), receipt.SignatureSet.Signatures...)
+	for index := range clone.SignatureSet.Signatures {
+		clone.SignatureSet.Signatures[index].Value = append([]byte(nil), receipt.SignatureSet.Signatures[index].Value...)
+	}
+	return clone
+}
+
+func localSigningManager() (*cryptosign.Manager, error) {
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate local disclosure key: %w", err)
+	}
+	keyring, err := keyprovider.NewEd25519Keyring("local-disclosure-signing-key", private)
+	if err != nil {
+		return nil, err
+	}
+	return cryptosign.NewManager([]keyprovider.SigningProvider{keyring}, cryptosign.Policy{
+		MinimumValidSignatures: 1, RequiredAlgorithms: []string{keyprovider.Ed25519Algorithm},
+	})
 }
