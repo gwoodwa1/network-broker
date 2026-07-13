@@ -19,7 +19,7 @@ import (
 // schema-validated envelope. Captured and sanitised payloads stay in the
 // artefact store; the envelope contains immutable references only.
 type PipelineSink struct {
-	Artefacts         *artefacts.Store
+	Artefacts         artefacts.PipelineStore
 	Sanitiser         sanitise.Pipeline
 	Parser            parsing.InterfaceStateParser
 	Assembler         *Assembler
@@ -34,7 +34,7 @@ type PipelineSink struct {
 	envelopes map[string]EvidenceEnvelope
 }
 
-func NewPipelineSink(store *artefacts.Store, sanitiser sanitise.Pipeline, parser parsing.InterfaceStateParser,
+func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Pipeline, parser parsing.InterfaceStateParser,
 	assembler *Assembler, transportName, encryptionKeyRef, collectorVersion, normaliserVersion string,
 	validity time.Duration, now func() time.Time,
 ) (*PipelineSink, error) {
@@ -52,7 +52,7 @@ func NewPipelineSink(store *artefacts.Store, sanitiser sanitise.Pipeline, parser
 	}, nil
 }
 
-func (s *PipelineSink) WriteCaptured(_ context.Context, task collector.Task, lease collector.Lease, captured transport.CapturedBytes) (attemptID, evidenceID string, err error) {
+func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, lease collector.Lease, captured transport.CapturedBytes) (attemptID, evidenceID string, err error) {
 	if captured.TargetID != task.TargetID {
 		return "", "", fmt.Errorf("captured target does not match task target")
 	}
@@ -61,7 +61,8 @@ func (s *PipelineSink) WriteCaptured(_ context.Context, task collector.Task, lea
 	}
 	now := s.Now().UTC()
 	attemptID = fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
-	capturedRef, err := s.Artefacts.PutCaptured(captured.Payload, "application/json", s.TransportName, attemptID, s.EncryptionKeyRef, captured.CapturedAt)
+	capturedRef, err := s.Artefacts.PutCapturedForTenant(ctx, task.TenantID, captured.Payload, "application/json",
+		s.TransportName, attemptID, s.EncryptionKeyRef, captured.CapturedAt)
 	if err != nil {
 		return "", "", err
 	}
@@ -69,7 +70,8 @@ func (s *PipelineSink) WriteCaptured(_ context.Context, task collector.Task, lea
 	if err != nil {
 		return "", "", err
 	}
-	sanitisedRef, err := s.Artefacts.PutSanitised(sanitisedPayload, "application/json", capturedRef.SHA256Digest, manifest, now)
+	sanitisedRef, err := s.Artefacts.PutSanitisedForTenant(ctx, task.TenantID, sanitisedPayload,
+		"application/json", capturedRef, manifest, now)
 	if err != nil {
 		return "", "", err
 	}

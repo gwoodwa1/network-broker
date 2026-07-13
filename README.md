@@ -150,11 +150,15 @@ Outbox dispatchers use ordered `FOR UPDATE SKIP LOCKED` claims, expiring worker 
 
 Dead-letter inspection and replay are available through a separately authorised operator surface. Configure `SERVER_TLS_CERT_FILE`, `SERVER_TLS_KEY_FILE`, `OPERATOR_CLIENT_CA_FILE`, and `OPERATOR_SPIFFE_TRUST_DOMAIN` together to enable TLS 1.3 and tenant-bound SPIFFE client authentication. When these settings are absent, operator routes are not registered. Replay is concurrency-safe and idempotent, resets the bounded delivery-attempt cycle, and records the previous failure in an append-only PostgreSQL audit row. See the [dead-letter operations contract and runbook](docs/dead-letter-operations.md).
 
+## Durable artefact storage
+
+The evidence pipeline now accepts a tenant-aware artefact storage interface. The reference memory store remains available for deterministic local workflows, while `DurableStore` composes immutable PostgreSQL lineage metadata with an S3-compatible blob adapter. Artefact records have stable idempotent identifiers; object keys are tenant-encoded and content-addressed by SHA-256. Reads enforce the recorded byte count and recompute the digest before returning any bytes. Migration `000004_artefact_metadata` makes metadata append-only and enforces captured-to-sanitised parentage within a tenant. See the [durable artefact storage contract](docs/artefact-storage.md).
+
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
-- Durable object storage and object lifecycle management.
+- Production runtime wiring for durable object storage, lifecycle enforcement, retention and deletion holds.
 - Generated protobuf API contracts and network-facing services.
 - Production gNMI, NETCONF, or SSH transport implementations.
 - External policy bundles and approval persistence.

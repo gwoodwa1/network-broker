@@ -2,6 +2,7 @@
 package artefacts
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -45,6 +46,26 @@ type Store struct {
 }
 
 func NewStore() *Store { return &Store{objects: make(map[string][]byte)} }
+
+func (s *Store) PutCapturedForTenant(_ context.Context, tenantID string, payload []byte,
+	mediaType, transport, attemptID, encryptionKeyRef string, capturedAt time.Time,
+) (CapturedRef, error) {
+	if invalidSegment(tenantID) {
+		return CapturedRef{}, fmt.Errorf("tenant is required")
+	}
+
+	return s.PutCaptured(payload, mediaType, transport, attemptID, encryptionKeyRef, capturedAt)
+}
+
+func (s *Store) PutSanitisedForTenant(_ context.Context, tenantID string, payload []byte,
+	mediaType string, parent CapturedRef, manifest TransformationManifest, createdAt time.Time,
+) (SanitisedRef, error) {
+	if invalidSegment(tenantID) || parent.URI == "" {
+		return SanitisedRef{}, fmt.Errorf("tenant and captured parent are required")
+	}
+
+	return s.PutSanitised(payload, mediaType, parent.SHA256Digest, manifest, createdAt)
+}
 
 func (s *Store) PutCaptured(payload []byte, mediaType, transport, attemptID, encryptionKeyRef string, capturedAt time.Time) (CapturedRef, error) {
 	if len(payload) == 0 || mediaType == "" || transport == "" || attemptID == "" || encryptionKeyRef == "" || capturedAt.IsZero() {
