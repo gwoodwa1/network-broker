@@ -94,7 +94,10 @@ func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, l
 	if err != nil {
 		return "", "", err
 	}
-	observation, err := s.Parser.Parse(sanitisedPayload)
+	if manifest.Quarantined {
+		return "", "", fmt.Errorf("sanitised artefact %q: %w", sanitisedRef.URI, sanitise.ErrQuarantined)
+	}
+	observation, err := s.Parser.ParseWithManifest(sanitisedPayload, manifest)
 	if err != nil {
 		return "", "", err
 	}

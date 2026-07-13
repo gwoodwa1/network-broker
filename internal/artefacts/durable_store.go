@@ -115,6 +115,13 @@ func (s *DurableStore) PutSanitisedForTenant(ctx context.Context, tenantID strin
 		manifest.OutputByteCount != boundedByteCount(len(payload)) {
 		return SanitisedRef{}, fmt.Errorf("sanitised parent and matching transformation manifest are required")
 	}
+	if err := validateTransformationManifest(manifest); err != nil {
+		return SanitisedRef{}, err
+	}
+	if manifest.ManifestVersion != "" &&
+		(manifest.InputDigest != parent.SHA256Digest || manifest.OutputDigest != digestBytes(payload)) {
+		return SanitisedRef{}, fmt.Errorf("manifest input or output digest does not match artefact lineage")
+	}
 	parentMetadata, err := s.metadata.Get(ctx, tenantID, parent.URI)
 	if err != nil {
 		return SanitisedRef{}, fmt.Errorf("get captured parent: %w", err)
@@ -134,6 +141,8 @@ func (s *DurableStore) PutSanitisedForTenant(ctx context.Context, tenantID strin
 	metadata.ManifestDigest = manifestDigest
 	manifestCopy := manifest
 	manifestCopy.RedactionsApplied = append([]string(nil), manifest.RedactionsApplied...)
+	manifestCopy.TaintedFields = append([]string(nil), manifest.TaintedFields...)
+	manifestCopy.Outcomes = append([]TransformationOutcome(nil), manifest.Outcomes...)
 	metadata.Manifest = &manifestCopy
 	if err := s.persist(ctx, metadata, payload); err != nil {
 		return SanitisedRef{}, err

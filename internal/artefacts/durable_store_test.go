@@ -80,7 +80,9 @@ func TestDurableStorePreservesTenantScopedImmutableLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := TransformationManifest{
-		PipelineID: "default", PipelineVersion: "v1", RedactionsApplied: []string{"secret"},
+		PipelineID: "default", PipelineVersion: "v2", RulesVersion: "hostile-output/v1",
+		RedactionsApplied: []string{"configured-redaction-0001"}, TaintedFields: []string{"$"},
+		Outcomes:          []TransformationOutcome{{Action: "redacted", ReasonCode: "configured_redaction", JSONPath: "$", Count: 1}},
 		OriginalByteCount: 10, OutputByteCount: 17,
 	}
 	sanitised, err := store.PutSanitisedForTenant(context.Background(), "tenant/a", []byte("secret=[REDACTED]"),
@@ -97,7 +99,9 @@ func TestDurableStorePreservesTenantScopedImmutableLineage(t *testing.T) {
 		}
 	}
 	got, gotMetadata, err := store.Get(context.Background(), "tenant/a", sanitised.URI)
-	if err != nil || string(got) != "secret=[REDACTED]" || gotMetadata.ParentArtefactID == "" {
+	if err != nil || string(got) != "secret=[REDACTED]" || gotMetadata.ParentArtefactID == "" ||
+		gotMetadata.Manifest == nil || gotMetadata.Manifest.RulesVersion != "hostile-output/v1" ||
+		len(gotMetadata.Manifest.Outcomes) != 1 {
 		t.Fatalf("unexpected durable artefact: payload=%q metadata=%+v error=%v", got, gotMetadata, err)
 	}
 	if _, _, err := store.Get(context.Background(), "tenant-b", sanitised.URI); !errors.Is(err, ErrArtefactNotFound) {

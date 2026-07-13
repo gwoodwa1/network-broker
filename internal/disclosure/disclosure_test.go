@@ -97,13 +97,14 @@ func TestReceiptRejectsTamperingAndSignatureStripping(t *testing.T) {
 	decision, err := service.Evaluate(DecisionRequest{
 		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
 		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1",
-		PermittedFields: []string{"operational_state"}, TTL: time.Minute,
+		PermittedFields: []string{"operational_state"}, AllowTaintedFields: true, TTL: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, receipt, err := service.Deliver(decision.DecisionID, "actor-a", "tenant-a", "evidence-1", "request-1", "normalised",
-		map[string]string{"operational_state": "up"}, nil)
+	_, receipt, err := service.DeliverContextWithTaint(context.Background(), decision.DecisionID, "actor-a",
+		"tenant-a", "evidence-1", "request-1", "normalised", map[string]string{"operational_state": "up"}, nil,
+		[]string{"operational_state"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +117,113 @@ func TestReceiptRejectsTamperingAndSignatureStripping(t *testing.T) {
 	stripped.SignatureSet.Signatures = nil
 	if err := service.VerifyReceipt(context.Background(), stripped); err == nil {
 		t.Fatal("expected stripped signature set to be rejected")
+	}
+	taintTampered := *receipt
+	taintTampered.TaintedFields = nil
+	if err := service.VerifyReceipt(context.Background(), taintTampered); err == nil {
+		t.Fatal("expected removed taint metadata to invalidate receipt")
+	}
+}
+
+func TestDisclosureRejectsTaintedFieldsByDefaultAndWarnsWhenAllowed(t *testing.T) {
+	service := NewService()
+	request := DecisionRequest{
+		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1", Representation: "normalised",
+		PolicyBundleDigest: "policy-1", InputDigest: "input-1", PermittedFields: []string{"interface_name"},
+		TTL: time.Minute,
+	}
+	decision, err := service.Evaluate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliver := func(decisionID string) (*Receipt, error) {
+		_, receipt, deliverErr := service.DeliverContextWithTaint(context.Background(), decisionID, "actor-a",
+			"tenant-a", "evidence-1", "request-1", "normalised", map[string]string{"interface_name": "Ethernet1"},
+			nil, []string{"interface_name"})
+		return receipt, deliverErr
+	}
+	if _, err := deliver(decision.DecisionID); err == nil {
+		t.Fatal("expected tainted disclosure to fail closed by default")
+	}
+	request.AllowTaintedFields = true
+	decision, err = service.Evaluate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := deliver(decision.DecisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.TaintWarning != taintedDataWarning {
+		t.Fatalf("mandatory taint warning missing from receipt: %+v", receipt)
+	}
+	if err := service.VerifyReceipt(context.Background(), *receipt); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeliverRejectsTaintForUndeliveredField(t *testing.T) {
+	service := NewService()
+	decision, err := service.Evaluate(DecisionRequest{
+		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
+		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1",
+		PermittedFields: []string{"operational_state"}, TTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = service.DeliverContextWithTaint(context.Background(), decision.DecisionID, "actor-a", "tenant-a",
+		"evidence-1", "request-1", "normalised", map[string]string{"operational_state": "up"}, nil,
+		[]string{"interface_name"})
+	if err == nil {
+		t.Fatal("expected taint metadata for an undelivered field to fail closed")
+	}
+}
+
+func TestReceiptV1RemainsVerifiable(t *testing.T) {
+	service := NewService()
+	receipt := Receipt{
+		SchemaVersion: receiptSchemaVersionV1, ReceiptID: "receipt-legacy", TenantID: "tenant-a",
+		EvidenceID: "evidence-1", ActorID: "actor-a", DisclosureDecisionID: "decision-1",
+		PolicyBundleDigest: "policy-1", PolicyInputDigest: "input-1", Representation: "normalised",
+		FieldsDelivered: []string{"operational_state"}, DeliveredPayloadDigest: "digest-1",
+		RequestID: "request-1", DeliveredAt: time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC),
+	}
+	canonical, err := canonicalReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.SignatureSet, err = service.signing.Sign(context.Background(), receiptSigningPurpose,
+		receiptSigningDomainV1, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyReceipt(context.Background(), receipt); err != nil {
+		t.Fatalf("legacy receipt no longer verifies: %v", err)
+	}
+}
+
+func TestReceiptV2RemainsVerifiable(t *testing.T) {
+	service := NewService()
+	receipt := Receipt{
+		SchemaVersion: receiptSchemaVersionV2, ReceiptID: "receipt-v2", TenantID: "tenant-a",
+		EvidenceID: "evidence-1", ActorID: "actor-a", DisclosureDecisionID: "decision-1",
+		PolicyBundleDigest: "policy-1", PolicyInputDigest: "input-1", Representation: "normalised",
+		FieldsDelivered: []string{"interface_name"}, TaintedFields: []string{"interface_name"},
+		DeliveredPayloadDigest: "digest-1", RequestID: "request-1",
+		DeliveredAt: time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC),
+	}
+	canonical, err := canonicalReceipt(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.SignatureSet, err = service.signing.Sign(context.Background(), receiptSigningPurpose,
+		receiptSigningDomainV2, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyReceipt(context.Background(), receipt); err != nil {
+		t.Fatalf("v2 receipt no longer verifies: %v", err)
 	}
 }
 

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:network-broker:schema:adversarial-sanitisation-manifest:v1",
+  "title": "Network Broker adversarial sanitisation manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "pipeline_id",
+    "sanitiser_version",
+    "rule_set_version",
+    "input_digest",
+    "output_digest",
+    "overall_status",
+    "redactions_applied",
+    "original_byte_count",
+    "output_byte_count"
+  ],
+  "properties": {
+    "manifest_version": { "const": "network-broker-sanitisation-manifest/v1" },
+    "pipeline_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "sanitiser_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "rule_set_version": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "input_digest": { "$ref": "#/$defs/sha256" },
+    "output_digest": { "$ref": "#/$defs/sha256" },
+    "overall_status": { "enum": ["clean", "tainted", "quarantined"] },
+    "redactions_applied": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "tainted_fields": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "type": "string", "minLength": 1, "maxLength": 512 }
+    },
+    "transformations": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "#/$defs/transformation" }
+    },
+    "quarantined": { "type": "boolean" },
+    "truncated": { "type": "boolean" },
+    "original_byte_count": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+    "output_byte_count": { "type": "integer", "minimum": 1, "maximum": 16777216 }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "transformation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "reason_code", "path", "count"],
+      "properties": {
+        "action": {
+          "enum": ["retained", "redacted", "stripped", "tainted", "rejected", "truncated", "quarantined"]
+        },
+        "reason_code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "rule_position": { "type": "integer", "minimum": 1 },
+        "count": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

@@ -33,6 +33,11 @@ func TestAssemblerSignsCompleteLineage(t *testing.T) {
 	if err := assembler.Verify(tampered); err == nil {
 		t.Fatal("expected tampered observation to fail signature verification")
 	}
+	manifestTampered := envelope
+	manifestTampered.Sanitised.TransformationManifestDigest = "different-manifest"
+	if err := assembler.Verify(manifestTampered); err == nil {
+		t.Fatal("expected a changed sanitisation manifest digest to fail signature verification")
+	}
 }
 
 func TestAssemblerRejectsStaleAttemptAndBrokenLineage(t *testing.T) {
@@ -112,7 +117,7 @@ func validInput() AssemblyInput {
 		TriggerDecisionID: "trigger-1", PlanningDecisionID: "planning-1", ExecutionDecisionID: "execution-1",
 		ExecutionGrantID: "grant-1", AcceptedAttemptID: "attempt-1", FencingToken: 7, CompatibilityRecordHash: "compat-hash",
 		Captured:  artefacts.CapturedRef{URI: "captured", SHA256Digest: "captured-hash", ByteCount: 10},
-		Sanitised: artefacts.SanitisedRef{URI: "sanitised", SHA256Digest: "sanitised-hash", ParentCapturedDigest: "captured-hash"},
+		Sanitised: artefacts.SanitisedRef{URI: "sanitised", SHA256Digest: "sanitised-hash", ParentCapturedDigest: "captured-hash", TransformationManifestDigest: "manifest-hash"},
 		ParserID:  "parser-1", ParserVersion: "v1", NormaliserVersion: "v1", Completeness: 1,
 		ValidUntil: observed.Add(5 * time.Minute), Observation: parsing.InterfaceOperationalState{SchemaVersion: "v1", InterfaceName: "Ethernet1", OperationalState: "up", ObservedAt: observed},
 		CollectorIdentity: "spiffe://example.test/collector/a", CollectorVersion: "v1", AuditReference: "audit-1", AssembledAt: observed.Add(time.Second),

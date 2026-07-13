@@ -158,6 +158,8 @@ Signed, immutable policy bundles can be activated by scope and evaluated with co
 
 Read-only gNMI, NETCONF and SSH adapters enforce exact catalogue recipe versions, short-lived opaque credential exchange, deadlines and byte bounds. gNMI requires TLS 1.3 with explicit roots and hostname verification; NETCONF and SSH require verified SSH host keys. See [transport security](docs/transport-security.md), the [threat model](docs/threat-model.md) and [production hardening](docs/production-hardening.md).
 
+Captured device output is treated as hostile. Versioned deterministic rules bound and inspect structured content, quarantine prompt-like or encoded hostile text into a safe marker, and record tainted free-text paths and transformation reason codes. Strict parsers require this taint lineage, and signed disclosure receipts preserve taint for delivered fields. See [adversarial sanitisation](docs/adversarial-sanitisation.md).
+
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
@@ -168,6 +170,7 @@ This repository is a security-oriented prototype, not a production service. Impo
 - Production activation and administration surfaces for signed policy bundles and approvals.
 - SPIRE deployment, external credential-broker runtime integration and non-AWS HSM/KMS adapters.
 - Durable disclosure-receipt persistence, formal algorithm lifecycle policy and experimental standardized post-quantum providers.
+- Broader protocol-specific hostile-output corpora and operational tuning of quarantine rules against qualified device releases.
 - Tracing, audit-ledger export, resilience testing, dashboards, alerts, and rollout controls.
 - An independent security assessment; the repository includes a [review package](docs/security-review-package.md) but self-review does not satisfy this requirement.
 
@@ -182,6 +185,7 @@ The prototype is built around several explicit constraints:
 - A collector must hold the current lease and fencing token.
 - An execution grant is signed, short-lived, and bound to one collector and operation.
 - Captured bytes are never silently overwritten by sanitised data.
+- Hostile or structurally invalid device output is quarantined before typed parsing and evidence signing.
 - Evidence is signed only for the current fenced attempt with complete lineage.
 - Every retrieval is independently authorized for the current actor and produces a signed, payload-bound receipt.
 

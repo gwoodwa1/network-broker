@@ -201,7 +201,8 @@ func validateInput(input AssemblyInput) error {
 		input.ValidUntil.IsZero() || !input.ValidUntil.After(input.Observation.ObservedAt) {
 		return fmt.Errorf("evidence fence, completeness and validity values are invalid")
 	}
-	if input.Captured.SHA256Digest == "" || input.Sanitised.SHA256Digest == "" || input.Observation.SchemaVersion == "" {
+	if input.Captured.SHA256Digest == "" || input.Sanitised.SHA256Digest == "" ||
+		input.Sanitised.TransformationManifestDigest == "" || input.Observation.SchemaVersion == "" {
 		return fmt.Errorf("captured, sanitised and normalised evidence are required")
 	}
 	return nil

@@ -4,6 +4,7 @@ package retrieval
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"network_broker/internal/disclosure"
 	"network_broker/internal/evidence"
@@ -20,9 +21,10 @@ type Request struct {
 }
 
 type Result struct {
-	EvidenceID string
-	Fields     map[string]string
-	Receipt    disclosure.Receipt
+	EvidenceID    string
+	Fields        map[string]string
+	TaintedFields []string
+	Receipt       disclosure.Receipt
 }
 
 type Service struct {
@@ -52,17 +54,21 @@ func (s Service) RetrieveNormalised(ctx context.Context, request Request) (Resul
 		"observed_at":       envelope.InterfaceState.ObservedAt.Format("2006-01-02T15:04:05.999999999Z07:00"),
 	}
 	selected := make(map[string]string, len(request.Fields))
+	tainted := make([]string, 0)
 	for _, field := range request.Fields {
 		value, ok := available[field]
 		if !ok {
 			return Result{}, fmt.Errorf("normalised field %q does not exist", field)
 		}
 		selected[field] = value
+		if slices.Contains(envelope.InterfaceState.TaintedFields, field) {
+			tainted = append(tainted, field)
+		}
 	}
-	delivered, receipt, err := s.Disclosure.DeliverContext(ctx, request.DecisionID, request.ActorID, request.TenantID,
-		request.EvidenceID, request.RequestID, "normalised", selected, request.Redactions)
+	delivered, receipt, err := s.Disclosure.DeliverContextWithTaint(ctx, request.DecisionID, request.ActorID,
+		request.TenantID, request.EvidenceID, request.RequestID, "normalised", selected, request.Redactions, tainted)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{EvidenceID: request.EvidenceID, Fields: delivered, Receipt: *receipt}, nil
+	return Result{EvidenceID: request.EvidenceID, Fields: delivered, TaintedFields: tainted, Receipt: *receipt}, nil
 }

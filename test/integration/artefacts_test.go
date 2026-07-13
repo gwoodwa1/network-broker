@@ -90,7 +90,9 @@ func TestPostgresArtefactMetadataAndDurableStore(t *testing.T) {
 		t.Fatalf("unexpected idempotent captured write: first=%+v second=%+v error=%v", captured, idempotent, err)
 	}
 	manifest := artefacts.TransformationManifest{
-		PipelineID: "default", PipelineVersion: "v1", RedactionsApplied: []string{"secret"},
+		PipelineID: "default", PipelineVersion: "v2", RulesVersion: "hostile-output/v1",
+		RedactionsApplied: []string{"configured-redaction-0001"}, TaintedFields: []string{"$"},
+		Outcomes:          []artefacts.TransformationOutcome{{Action: "redacted", ReasonCode: "configured_redaction", JSONPath: "$", Count: 1}},
 		OriginalByteCount: 10, OutputByteCount: 17,
 	}
 	sanitised, err := store.PutSanitisedForTenant(ctx, "artefact-tenant", []byte("secret=[REDACTED]"),
@@ -99,7 +101,9 @@ func TestPostgresArtefactMetadataAndDurableStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload, metadata, err := store.Get(ctx, "artefact-tenant", sanitised.URI)
-	if err != nil || string(payload) != "secret=[REDACTED]" || metadata.ParentArtefactID == "" {
+	if err != nil || string(payload) != "secret=[REDACTED]" || metadata.ParentArtefactID == "" ||
+		metadata.Manifest == nil || metadata.Manifest.RulesVersion != "hostile-output/v1" ||
+		len(metadata.Manifest.Outcomes) != 1 {
 		t.Fatalf("unexpected durable retrieval: payload=%q metadata=%+v error=%v", payload, metadata, err)
 	}
 	if _, _, err := store.Get(ctx, "other-tenant", sanitised.URI); !errors.Is(err, artefacts.ErrArtefactNotFound) {

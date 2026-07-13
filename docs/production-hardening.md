@@ -45,6 +45,15 @@ This document defines deployment requirements. Passing unit tests does not make 
 - Set CPU, memory, process, connection and concurrency limits. Alert on repeated bounded-response failures as potential device or denial-of-service events.
 - Export secret-safe structured logs and audit events to a separately administered, retention-controlled sink.
 
+## Adversarial device output
+
+- Treat rule versions as reviewed catalogue configuration. Do not let requests or device output select patterns, limits, free-text fields or quarantine behaviour.
+- Alert on quarantine rates by recipe and qualified device release without logging captured values.
+- Preserve captured quarantine parents under the appropriate access class and retention policy; expose them only through a separately authorised investigation path.
+- Require strict schema parsers to reject unknown fields and caller-supplied taint metadata. Propagate schema-derived taint through evidence and disclosure.
+- Render tainted fields as data. Never concatenate device-controlled values into prompts, commands, policy source or tool instructions.
+- Keep any probabilistic or LLM classifier advisory and unable to override deterministic bounds, quarantine or schema rejection.
+
 ## Release evidence
 
 Before promotion, retain the commit SHA and results for race tests, strict lint, `gosec`, `govulncheck`, migration tests, protocol conformance tests, image builds and the independent security assessment. Record all exceptions with an owner and expiry.
