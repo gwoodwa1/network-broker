@@ -17,6 +17,17 @@ The default rules:
 - identify configured redactions by opaque rule position rather than recording a secret or a guessable hash of it; and
 - emit deterministic retained, redacted, stripped, tainted, rejected, truncated and quarantined reason codes.
 
+The starter high-signal catalogue includes:
+
+- instruction markers such as `SYSTEM:`, `INSTRUCTION:`, `ASSISTANT:`, `IGNORE PREVIOUS`, Markdown headings and fenced code blocks;
+- Unicode-obfuscated variants detected after NFKC normalisation;
+- terminal CSI/OSC sequences, encoded terminal controls and prohibited embedded control characters;
+- long base64, hexadecimal and URL-percent-encoded runs in device-controlled free-text fields; and
+- abnormal repetition of a character beyond the configured threshold.
+
+These are conservative indicators, not a universal prompt-injection grammar. Device- and protocol-specific
+catalogues can extend them, but cannot override deterministic quarantine or the typed parser boundary.
+
 The versioned manifest contract is published as
 [`schemas/adversarial-sanitisation-manifest-v1.schema.json`](schemas/adversarial-sanitisation-manifest-v1.schema.json).
 It binds the captured and derivative SHA-256 digests, records an overall `clean`, `tainted` or `quarantined`
@@ -35,7 +46,9 @@ only the captured object, safe marker derivative and transformation manifest rem
 The interface-state parser promotes only its exact schema and rejects unknown fields, including caller-supplied taint metadata. It independently marks `interface_name` as device-controlled and requires the sanitisation manifest to carry the matching path. Taint follows the typed observation into the signed evidence envelope, retrieval result and signed disclosure receipt.
 
 Disclosure policy denies tainted fields by default. An actor-specific decision must explicitly allow them;
-when it does, the signed receipt carries both the delivered taint paths and a mandatory consumer warning.
+when it does, the signed receipt carries the delivered taint paths, a mandatory consumer warning and a
+human-readable sanitisation summary. Clean deliveries also carry a signed summary stating that no tainted
+fields were delivered.
 
 Taint is a warning about data origin, not a substitute for output encoding or agent-side instruction/data separation. Consumers must render tainted values as data and must never concatenate them into system prompts, tool instructions, commands or policy source.
 

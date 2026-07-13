@@ -157,8 +157,16 @@ func TestDisclosureRejectsTaintedFieldsByDefaultAndWarnsWhenAllowed(t *testing.T
 	if receipt.TaintWarning != taintedDataWarning {
 		t.Fatalf("mandatory taint warning missing from receipt: %+v", receipt)
 	}
+	if receipt.SanitisationSummary != "tainted: 1 device-controlled field(s) delivered" {
+		t.Fatalf("sanitisation summary missing from receipt: %+v", receipt)
+	}
 	if err := service.VerifyReceipt(context.Background(), *receipt); err != nil {
 		t.Fatal(err)
+	}
+	tampered := *receipt
+	tampered.SanitisationSummary = "clean: no tainted fields delivered"
+	if err := service.VerifyReceipt(context.Background(), tampered); err == nil {
+		t.Fatal("expected a changed sanitisation summary to invalidate the receipt")
 	}
 }
 

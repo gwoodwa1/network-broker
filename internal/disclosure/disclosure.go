@@ -55,6 +55,7 @@ type Receipt struct {
 	FieldsDelivered        []string
 	TaintedFields          []string
 	TaintWarning           string
+	SanitisationSummary    string
 	RedactionsApplied      []string
 	DeliveredPayloadDigest string
 	RequestID              string
@@ -197,7 +198,8 @@ func (s *Service) DeliverContextWithTaint(ctx context.Context, decisionID, actor
 		EvidenceID: decision.EvidenceID, ActorID: decision.ActorID, DisclosureDecisionID: decision.DecisionID,
 		PolicyBundleDigest: decision.PolicyBundleDigest, PolicyInputDigest: decision.PolicyInputDigest,
 		Representation: representation, FieldsDelivered: fieldNames, TaintedFields: tainted,
-		RedactionsApplied: uniqueSorted(redactions), DeliveredPayloadDigest: hex.EncodeToString(digest[:]),
+		SanitisationSummary: sanitisationSummary(tainted),
+		RedactionsApplied:   uniqueSorted(redactions), DeliveredPayloadDigest: hex.EncodeToString(digest[:]),
 		RequestID: requestID, DeliveredAt: now,
 	}
 	if len(tainted) > 0 {
@@ -241,6 +243,13 @@ func validateTaintedFields(delivered, tainted []string) ([]string, error) {
 		}
 	}
 	return result, nil
+}
+
+func sanitisationSummary(tainted []string) string {
+	if len(tainted) == 0 {
+		return "clean: no tainted fields delivered"
+	}
+	return fmt.Sprintf("tainted: %d device-controlled field(s) delivered", len(tainted))
 }
 
 func validateDelivery(decision Decision, now time.Time, actorID, tenantID, evidenceID, representation string,
@@ -365,6 +374,9 @@ func canonicalReceiptV3(receipt Receipt, fields, tainted, redactions []string) (
 	if len(tainted) > 0 && receipt.TaintWarning != taintedDataWarning || len(tainted) == 0 && receipt.TaintWarning != "" {
 		return nil, fmt.Errorf("disclosure receipt taint warning does not match delivered taint")
 	}
+	if receipt.SanitisationSummary != sanitisationSummary(tainted) {
+		return nil, fmt.Errorf("disclosure receipt sanitisation summary does not match delivered taint")
+	}
 	payload := struct {
 		SchemaVersion          string   `json:"schema_version"`
 		ReceiptID              string   `json:"receipt_id"`
@@ -378,6 +390,7 @@ func canonicalReceiptV3(receipt Receipt, fields, tainted, redactions []string) (
 		FieldsDelivered        []string `json:"fields_delivered"`
 		TaintedFields          []string `json:"tainted_fields"`
 		TaintWarning           string   `json:"taint_warning,omitempty"`
+		SanitisationSummary    string   `json:"sanitisation_summary"`
 		RedactionsApplied      []string `json:"redactions_applied"`
 		DeliveredPayloadDigest string   `json:"delivered_payload_digest"`
 		RequestID              string   `json:"request_id"`
@@ -388,6 +401,7 @@ func canonicalReceiptV3(receipt Receipt, fields, tainted, redactions []string) (
 		PolicyBundleDigest: receipt.PolicyBundleDigest, PolicyInputDigest: receipt.PolicyInputDigest,
 		Representation: receipt.Representation, FieldsDelivered: fields, TaintedFields: tainted,
 		TaintWarning:           receipt.TaintWarning,
+		SanitisationSummary:    receipt.SanitisationSummary,
 		RedactionsApplied:      redactions,
 		DeliveredPayloadDigest: receipt.DeliveredPayloadDigest, RequestID: receipt.RequestID,
 		DeliveredAt: receipt.DeliveredAt.UTC().Format(time.RFC3339Nano),
