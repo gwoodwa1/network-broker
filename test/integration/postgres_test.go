@@ -5,6 +5,7 @@ package integration_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -15,6 +16,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"network_broker/internal/authctx"
+	"network_broker/internal/deadletter"
 	"network_broker/internal/outbox"
 	"network_broker/internal/resolution"
 	"network_broker/migrations"
@@ -47,7 +50,8 @@ func TestPostgresResolutionAndOutboxLifecycle(t *testing.T) {
 		t.Fatalf("idempotent migration application failed: %v", err)
 	}
 	if _, err := database.ExecContext(ctx,
-		`TRUNCATE broker_outbox, broker_resolution_idempotency, broker_resolutions RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE broker_dead_letter_actions, broker_outbox, broker_resolution_idempotency, broker_resolutions
+		 RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	natsConnection, err := nats.Connect(natsURL, nats.Name("network-broker-integration"))
@@ -194,5 +198,95 @@ func TestPostgresResolutionAndOutboxLifecycle(t *testing.T) {
 	}
 	if streamInfo.State.Msgs != 2 {
 		t.Fatalf("expected two unique broker events, got %d", streamInfo.State.Msgs)
+	}
+	if _, err := service.Transition(ctx, resolution.TransitionRequest{
+		TenantID: created.Resolution.TenantID, ResolutionID: created.Resolution.ID,
+		ExpectedVersion: 3, NextState: resolution.ResolutionQueued,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failedRecords, err := store.Claim(ctx, "worker-d", 10, now.Add(5*time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failedRecords) != 1 {
+		t.Fatalf("expected one event for dead-letter operations, got %d", len(failedRecords))
+	}
+	if err := store.DeadLetter(ctx, failedRecords[0].Sequence, "worker-d",
+		now.Add(5*time.Minute+time.Second), "sensitive broker failure"); err != nil {
+		t.Fatal(err)
+	}
+	deadLetterRepository, err := deadletter.NewPostgresRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadLetterService, err := deadletter.NewService(deadLetterRepository,
+		func(string) (string, error) { return "dead-letter-action-integration", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := authctx.AuthContext{
+		SubjectID: "spiffe://broker.example/tenant/tenant-a/role/outbox-operator/workload/operator-a",
+		SPIFFEID:  "spiffe://broker.example/tenant/tenant-a/role/outbox-operator/workload/operator-a",
+		TenantID:  "tenant-a", Roles: []string{deadletter.OperatorRole},
+		AllowedScopes:   []string{deadletter.ReadScope, deadletter.ReplayScope},
+		AuthenticatedAt: now, IdentityRevision: "revision-1",
+	}
+	entries, err := deadLetterService.List(ctx, operator, 0, 10)
+	if err != nil || len(entries) != 1 || entries[0].EventID != failedRecords[0].ID {
+		t.Fatalf("unexpected dead-letter listing: entries=%+v error=%v", entries, err)
+	}
+	otherTenant := operator
+	otherTenant.TenantID = "tenant-b"
+	if _, err := deadLetterService.Get(ctx, otherTenant, failedRecords[0].ID); !errors.Is(err, deadletter.ErrNotFound) {
+		t.Fatalf("expected cross-tenant lookup to be indistinguishable from missing, got %v", err)
+	}
+	type replayOutcome struct {
+		result deadletter.ReplayResult
+		err    error
+	}
+	replayStart := make(chan struct{})
+	replayOutcomes := make(chan replayOutcome, 2)
+	for range 2 {
+		go func() {
+			<-replayStart
+			result, replayErr := deadLetterService.Replay(ctx, operator, failedRecords[0].ID,
+				"replay-request-1", "broker configuration repaired")
+			replayOutcomes <- replayOutcome{result: result, err: replayErr}
+		}()
+	}
+	close(replayStart)
+	firstReplay, secondReplay := <-replayOutcomes, <-replayOutcomes
+	if firstReplay.err != nil || secondReplay.err != nil {
+		t.Fatalf("concurrent replay failed: first=%v second=%v", firstReplay.err, secondReplay.err)
+	}
+	replay, idempotentReplay := firstReplay.result, secondReplay.result
+	if !replay.Replayed {
+		replay, idempotentReplay = idempotentReplay, replay
+	}
+	if !replay.Replayed || idempotentReplay.Replayed || idempotentReplay.ActionID != replay.ActionID {
+		t.Fatalf("unexpected concurrent idempotency: applied=%+v idempotent=%+v", replay, idempotentReplay)
+	}
+	if _, err := deadLetterService.Replay(ctx, operator, failedRecords[0].ID,
+		"replay-request-1", "different operator intent"); !errors.Is(err, deadletter.ErrReplayConflict) {
+		t.Fatalf("expected changed replay intent to conflict, got %v", err)
+	}
+	replayedRecords, err := store.Claim(ctx, "worker-e", 10, replay.AvailableAt.Add(time.Second), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayedRecords) != 1 || replayedRecords[0].Attempts != 1 {
+		t.Fatalf("expected reset replay attempt, got %+v", replayedRecords)
+	}
+	var auditCount int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM broker_dead_letter_actions`).Scan(&auditCount); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("expected one immutable replay audit row, got %d", auditCount)
+	}
+	if _, err := database.ExecContext(ctx,
+		`UPDATE broker_dead_letter_actions SET reason = 'tampered' WHERE action_id = $1`, replay.ActionID); err == nil {
+		t.Fatal("expected append-only audit trigger to reject mutation")
 	}
 }

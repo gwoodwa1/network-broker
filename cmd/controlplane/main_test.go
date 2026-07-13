@@ -44,6 +44,16 @@ func TestLoadConfigRequiresCompleteNATSTLSIdentity(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRequiresCompleteOperatorMTLSConfiguration(t *testing.T) {
+	values := map[string]string{
+		"DATABASE_URL": "postgres://localhost/broker", "NATS_URL": "nats://localhost:4222",
+		"OUTBOX_WORKER_ID": "worker-a", "SERVER_TLS_CERT_FILE": "/identity/server.pem",
+	}
+	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {
+		t.Fatal("expected incomplete operator mTLS configuration to fail")
+	}
+}
+
 func TestReadinessFailsClosedWithoutDependencies(t *testing.T) {
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", http.NoBody)
 	if err != nil {

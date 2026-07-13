@@ -1,0 +1,5 @@
+DROP TRIGGER IF EXISTS broker_dead_letter_actions_append_only ON broker_dead_letter_actions;
+DROP FUNCTION IF EXISTS broker_reject_dead_letter_action_mutation;
+DROP INDEX IF EXISTS broker_dead_letter_action_event_idx;
+DROP INDEX IF EXISTS broker_outbox_dead_letter_tenant_idx;
+DROP TABLE IF EXISTS broker_dead_letter_actions;

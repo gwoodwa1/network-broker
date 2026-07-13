@@ -148,11 +148,13 @@ The NATS stream is provisioned separately from the application and must cover th
 
 Outbox dispatchers use ordered `FOR UPDATE SKIP LOCKED` claims, expiring worker leases, bounded exponential retry scheduling, and terminal dead-letter state. The JetStream publisher waits for a persistence acknowledgement, asserts the expected stream, and supplies the immutable event ID for server-side deduplication. Consumers must still be idempotent because delivery remains intentionally at least once outside JetStream's configured duplicate window.
 
+Dead-letter inspection and replay are available through a separately authorised operator surface. Configure `SERVER_TLS_CERT_FILE`, `SERVER_TLS_KEY_FILE`, `OPERATOR_CLIENT_CA_FILE`, and `OPERATOR_SPIFFE_TRUST_DOMAIN` together to enable TLS 1.3 and tenant-bound SPIFFE client authentication. When these settings are absent, operator routes are not registered. Replay is concurrency-safe and idempotent, resets the bounded delivery-attempt cycle, and records the previous failure in an append-only PostgreSQL audit row. See the [dead-letter operations contract and runbook](docs/dead-letter-operations.md).
+
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
-- A dead-letter operations workflow and durable object storage.
+- Durable object storage and object lifecycle management.
 - Generated protobuf API contracts and network-facing services.
 - Production gNMI, NETCONF, or SSH transport implementations.
 - External policy bundles and approval persistence.

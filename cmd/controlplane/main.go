@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -19,6 +21,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"golang.org/x/sync/errgroup"
 
+	"network_broker/internal/deadletter"
+	"network_broker/internal/operatorauth"
 	"network_broker/internal/outbox"
 	"network_broker/internal/resolution"
 	"network_broker/migrations"
@@ -38,17 +42,21 @@ const (
 )
 
 type config struct {
-	DatabaseURL     string
-	ListenAddress   string
-	ApplyMigrations bool
-	NATSURL         string
-	NATSStream      string
-	NATSSubject     string
-	NATSCredentials string
-	NATSCAFile      string
-	NATSCertFile    string
-	NATSKeyFile     string
-	OutboxWorkerID  string
+	DatabaseURL               string
+	ListenAddress             string
+	ApplyMigrations           bool
+	NATSURL                   string
+	NATSStream                string
+	NATSSubject               string
+	NATSCredentials           string
+	NATSCAFile                string
+	NATSCertFile              string
+	NATSKeyFile               string
+	OutboxWorkerID            string
+	ServerTLSCertFile         string
+	ServerTLSKeyFile          string
+	OperatorClientCAFile      string
+	OperatorSPIFFETrustDomain string
 }
 
 type application struct {
@@ -57,6 +65,7 @@ type application struct {
 	outbox      *outbox.PostgresStore
 	nats        *nats.Conn
 	metrics     *outbox.Metrics
+	deadLetters *deadLetterAPI
 }
 
 type deliveryRuntime struct {
@@ -115,9 +124,14 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 			logger.Error("event broker drain failed", "error", drainErr)
 		}
 	}()
+	deadLetterAPI, serverTLS, err := newOperatorRuntime(configuration, database, logger)
+	if err != nil {
+		logger.Error("operator API bootstrap failed", "error", err)
+		return 1
+	}
 	app := &application{
 		database: database, resolutions: resolutionRepository, outbox: outboxStore,
-		nats: delivery.connection, metrics: delivery.metrics,
+		nats: delivery.connection, metrics: delivery.metrics, deadLetters: deadLetterAPI,
 	}
 	server := &http.Server{
 		Addr:              configuration.ListenAddress,
@@ -127,8 +141,10 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 * 1024,
+		TLSConfig:         serverTLS,
 	}
-	logger.Info("control plane starting", "listen_address", configuration.ListenAddress)
+	logger.Info("control plane starting", "listen_address", configuration.ListenAddress,
+		"operator_api_enabled", deadLetterAPI != nil)
 	if err := serve(ctx, server, delivery.runner); err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			logger.Info("control plane stopped")
@@ -140,6 +156,44 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	logger.Info("control plane stopped")
 
 	return 0
+}
+
+func newOperatorRuntime(configuration config, database *sql.DB, logger *slog.Logger) (*deadLetterAPI, *tls.Config, error) {
+	if configuration.ServerTLSCertFile == "" {
+		return nil, nil, nil
+	}
+	certificate, err := tls.LoadX509KeyPair(configuration.ServerTLSCertFile, configuration.ServerTLSKeyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load control-plane TLS identity: %w", err)
+	}
+	// #nosec G304 -- this deployment-controlled CA path is required for operator mTLS trust.
+	clientCA, err := os.ReadFile(configuration.OperatorClientCAFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read operator client CA: %w", err)
+	}
+	clientCAPool := x509.NewCertPool()
+	if !clientCAPool.AppendCertsFromPEM(clientCA) {
+		return nil, nil, fmt.Errorf("operator client CA contains no certificates")
+	}
+	repository, err := deadletter.NewPostgresRepository(database)
+	if err != nil {
+		return nil, nil, err
+	}
+	service, err := deadletter.NewService(repository, randomIdentifier)
+	if err != nil {
+		return nil, nil, err
+	}
+	authenticator := operatorauth.Authenticator{TrustDomain: configuration.OperatorSPIFFETrustDomain, Now: time.Now}
+	api, err := newDeadLetterAPI(service, authenticator, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsConfiguration := &tls.Config{
+		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate},
+		ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: clientCAPool,
+	}
+
+	return api, tlsConfiguration, nil
 }
 
 func newDeliveryRuntime(configuration config, store outbox.Store, logger *slog.Logger) (*deliveryRuntime, error) {
@@ -171,16 +225,20 @@ func loadConfig(getenv func(string) string) (config, error) {
 		return config{}, fmt.Errorf("environment reader is required")
 	}
 	configuration := config{
-		DatabaseURL:     getenv("DATABASE_URL"),
-		ListenAddress:   getenv("LISTEN_ADDRESS"),
-		NATSURL:         getenv("NATS_URL"),
-		NATSStream:      getenv("NATS_STREAM"),
-		NATSSubject:     getenv("NATS_SUBJECT"),
-		NATSCredentials: getenv("NATS_CREDENTIALS_FILE"),
-		NATSCAFile:      getenv("NATS_CA_FILE"),
-		NATSCertFile:    getenv("NATS_CERT_FILE"),
-		NATSKeyFile:     getenv("NATS_KEY_FILE"),
-		OutboxWorkerID:  getenv("OUTBOX_WORKER_ID"),
+		DatabaseURL:               getenv("DATABASE_URL"),
+		ListenAddress:             getenv("LISTEN_ADDRESS"),
+		NATSURL:                   getenv("NATS_URL"),
+		NATSStream:                getenv("NATS_STREAM"),
+		NATSSubject:               getenv("NATS_SUBJECT"),
+		NATSCredentials:           getenv("NATS_CREDENTIALS_FILE"),
+		NATSCAFile:                getenv("NATS_CA_FILE"),
+		NATSCertFile:              getenv("NATS_CERT_FILE"),
+		NATSKeyFile:               getenv("NATS_KEY_FILE"),
+		OutboxWorkerID:            getenv("OUTBOX_WORKER_ID"),
+		ServerTLSCertFile:         getenv("SERVER_TLS_CERT_FILE"),
+		ServerTLSKeyFile:          getenv("SERVER_TLS_KEY_FILE"),
+		OperatorClientCAFile:      getenv("OPERATOR_CLIENT_CA_FILE"),
+		OperatorSPIFFETrustDomain: getenv("OPERATOR_SPIFFE_TRUST_DOMAIN"),
 	}
 	if configuration.DatabaseURL == "" {
 		return config{}, fmt.Errorf("DATABASE_URL is required")
@@ -202,6 +260,19 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	if (configuration.NATSCertFile == "") != (configuration.NATSKeyFile == "") {
 		return config{}, fmt.Errorf("NATS_CERT_FILE and NATS_KEY_FILE must be configured together")
+	}
+	operatorTLSValues := []string{
+		configuration.ServerTLSCertFile, configuration.ServerTLSKeyFile,
+		configuration.OperatorClientCAFile, configuration.OperatorSPIFFETrustDomain,
+	}
+	configuredOperatorTLSValues := 0
+	for _, value := range operatorTLSValues {
+		if value != "" {
+			configuredOperatorTLSValues++
+		}
+	}
+	if configuredOperatorTLSValues != 0 && configuredOperatorTLSValues != len(operatorTLSValues) {
+		return config{}, fmt.Errorf("server TLS identity, operator client CA and SPIFFE trust domain must be configured together")
 	}
 	if raw := getenv("APPLY_MIGRATIONS"); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -292,6 +363,9 @@ func (a *application) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", a.readiness)
 	mux.HandleFunc("GET /metrics", a.metricsHandler)
+	if a != nil && a.deadLetters != nil {
+		a.deadLetters.register(mux)
+	}
 
 	return mux
 }
@@ -333,12 +407,31 @@ func (a *application) metricsHandler(response http.ResponseWriter, _ *http.Reque
 	fmt.Fprintf(response, "# HELP network_broker_outbox_failures_total Outbox delivery or state-update failures.\n")
 	fmt.Fprintf(response, "# TYPE network_broker_outbox_failures_total counter\n")
 	fmt.Fprintf(response, "network_broker_outbox_failures_total %d\n", snapshot.Failures)
+	if a.deadLetters != nil {
+		fmt.Fprintf(response, "# HELP network_broker_dead_letter_replay_applied_total Dead-letter replay actions applied.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_dead_letter_replay_applied_total counter\n")
+		fmt.Fprintf(response, "network_broker_dead_letter_replay_applied_total %d\n",
+			a.deadLetters.metrics.replayApplied.Load())
+		fmt.Fprintf(response, "# HELP network_broker_dead_letter_replay_idempotent_total Idempotent dead-letter replay responses.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_dead_letter_replay_idempotent_total counter\n")
+		fmt.Fprintf(response, "network_broker_dead_letter_replay_idempotent_total %d\n",
+			a.deadLetters.metrics.replayIdempotent.Load())
+		fmt.Fprintf(response, "# HELP network_broker_dead_letter_operator_denied_total Denied operator requests.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_dead_letter_operator_denied_total counter\n")
+		fmt.Fprintf(response, "network_broker_dead_letter_operator_denied_total %d\n",
+			a.deadLetters.metrics.denied.Load())
+	}
 }
 
 func serve(ctx context.Context, server *http.Server, runner outbox.Runner) error {
 	group, serviceCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
-		err := server.ListenAndServe()
+		var err error
+		if server.TLSConfig == nil {
+			err = server.ListenAndServe()
+		} else {
+			err = server.ListenAndServeTLS("", "")
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
