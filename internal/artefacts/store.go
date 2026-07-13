@@ -51,8 +51,10 @@ func (s *Store) PutCaptured(payload []byte, mediaType, transport, attemptID, enc
 		return CapturedRef{}, fmt.Errorf("captured payload and metadata are required")
 	}
 	digest, uri := s.put("captured", payload)
-	return CapturedRef{URI: uri, SHA256Digest: digest, ByteCount: uint64(len(payload)), MediaType: mediaType,
-		Transport: transport, CapturedAt: capturedAt.UTC(), AttemptID: attemptID, EncryptionKeyRef: encryptionKeyRef}, nil
+	return CapturedRef{
+		URI: uri, SHA256Digest: digest, ByteCount: uint64(len(payload)), MediaType: mediaType,
+		Transport: transport, CapturedAt: capturedAt.UTC(), AttemptID: attemptID, EncryptionKeyRef: encryptionKeyRef,
+	}, nil
 }
 
 func (s *Store) PutSanitised(payload []byte, mediaType, parentDigest string, manifest TransformationManifest, createdAt time.Time) (SanitisedRef, error) {
@@ -72,8 +74,10 @@ func (s *Store) PutSanitised(payload []byte, mediaType, parentDigest string, man
 	manifestDigest := digestBytes([]byte(fmt.Sprintf("%s\x00%s\x00%v\x00%t\x00%d\x00%d", manifest.PipelineID,
 		manifest.PipelineVersion, manifest.RedactionsApplied, manifest.Truncated, manifest.OriginalByteCount, manifest.OutputByteCount)))
 	digest, uri := s.put("sanitised", payload)
-	return SanitisedRef{URI: uri, SHA256Digest: digest, ByteCount: uint64(len(payload)), MediaType: mediaType,
-		ParentCapturedDigest: parentDigest, TransformationManifestDigest: manifestDigest, CreatedAt: createdAt.UTC()}, nil
+	return SanitisedRef{
+		URI: uri, SHA256Digest: digest, ByteCount: uint64(len(payload)), MediaType: mediaType,
+		ParentCapturedDigest: parentDigest, TransformationManifestDigest: manifestDigest, CreatedAt: createdAt.UTC(),
+	}, nil
 }
 
 func (s *Store) Get(uri string) ([]byte, error) {
@@ -86,9 +90,9 @@ func (s *Store) Get(uri string) ([]byte, error) {
 	return append([]byte(nil), payload...), nil
 }
 
-func (s *Store) put(class string, payload []byte) (string, string) {
-	digest := digestBytes(payload)
-	uri := fmt.Sprintf("artefact://%s/sha256/%s", class, digest)
+func (s *Store) put(class string, payload []byte) (digest, uri string) {
+	digest = digestBytes(payload)
+	uri = fmt.Sprintf("artefact://%s/sha256/%s", class, digest)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.objects[uri]; !exists {

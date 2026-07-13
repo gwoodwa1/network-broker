@@ -185,9 +185,9 @@ func validateGrant(grant ExecutionGrant) error {
 }
 
 func signingPayload(grant ExecutionGrant) ([]byte, error) {
-	copy := grant
-	copy.Signature = nil
-	payload, err := json.Marshal(copy)
+	grantCopy := grant
+	grantCopy.Signature = nil
+	payload, err := json.Marshal(grantCopy)
 	if err != nil {
 		return nil, fmt.Errorf("encode execution grant: %w", err)
 	}

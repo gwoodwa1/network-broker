@@ -49,7 +49,9 @@ func (p Pipeline) Transform(captured []byte) ([]byte, artefacts.TransformationMa
 		clean = clean[:limit]
 	}
 	sort.Strings(applied)
-	manifest := artefacts.TransformationManifest{PipelineID: p.ID, PipelineVersion: p.Version,
-		RedactionsApplied: applied, Truncated: truncated, OriginalByteCount: uint64(len(captured)), OutputByteCount: uint64(len(clean))}
+	manifest := artefacts.TransformationManifest{
+		PipelineID: p.ID, PipelineVersion: p.Version,
+		RedactionsApplied: applied, Truncated: truncated, OriginalByteCount: uint64(len(captured)), OutputByteCount: uint64(len(clean)),
+	}
 	return clean, manifest, nil
 }

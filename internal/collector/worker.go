@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -62,6 +63,7 @@ type Worker struct {
 	Now             func() time.Time
 }
 
+//nolint:cyclop,funlen // Run deliberately keeps the security-sensitive attempt sequence linear and auditable.
 func (w Worker) Run(ctx context.Context, taskID string) error {
 	if w.ID == "" || w.Tasks == nil || w.Transport == nil || w.Sink == nil {
 		return fmt.Errorf("collector id, task store, transport and captured sink are required")
@@ -94,14 +96,12 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		MaximumDuration: w.MaximumDuration, MaximumBytes: w.MaximumBytes, EvaluatedAt: now(),
 	})
 	if err != nil {
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return fmt.Errorf("re-authorize task %q: %w", taskID, err)
+		return w.failAttempt(taskID, lease, now(), fmt.Errorf("re-authorize task %q: %w", taskID, err))
 	}
 	if authorization.DecisionID == "" || authorization.MaximumDuration <= 0 || authorization.MaximumBytes <= 0 ||
 		authorization.MaximumDuration > w.MaximumDuration || authorization.MaximumBytes > w.MaximumBytes {
 		err := fmt.Errorf("execution authorization returned invalid or expanded limits")
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return err
+		return w.failAttempt(taskID, lease, now(), err)
 	}
 	issuedAt := now()
 	expiresAt := issuedAt.Add(w.GrantTTL)
@@ -110,8 +110,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	}
 	if expiresAt.Before(issuedAt.Add(authorization.MaximumDuration)) {
 		err := fmt.Errorf("lease and grant validity do not cover authorised execution duration")
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return err
+		return w.failAttempt(taskID, lease, now(), err)
 	}
 	grantID, err := randomID("grant")
 	if err != nil {
@@ -132,8 +131,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		MaximumResponseBytes: authorization.MaximumBytes, CredentialClass: "network-read", SingleUse: true,
 	})
 	if err != nil {
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return fmt.Errorf("issue execution grant for task %q: %w", taskID, err)
+		return w.failAttempt(taskID, lease, now(), fmt.Errorf("issue execution grant for task %q: %w", taskID, err))
 	}
 	if err := w.Tasks.RecordExecutionAuthority(taskID, w.ID, lease.FencingToken, authorization.DecisionID, grant.GrantID, now()); err != nil {
 		return err
@@ -148,14 +146,12 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		FencingToken: lease.FencingToken, Now: now(),
 	})
 	if err != nil {
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return fmt.Errorf("exchange execution grant for task %q: %w", taskID, err)
+		return w.failAttempt(taskID, lease, now(), fmt.Errorf("exchange execution grant for task %q: %w", taskID, err))
 	}
 	if credential.Token == "" || credential.GrantID != grant.GrantID || credential.TargetID != task.TargetID ||
 		credential.RecipeID != task.RecipeID || credential.FencingToken != lease.FencingToken {
 		err := fmt.Errorf("credential broker returned mismatched credential")
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return err
+		return w.failAttempt(taskID, lease, now(), err)
 	}
 
 	executionCtx, cancel := context.WithTimeout(ctx, authorization.MaximumDuration)
@@ -170,19 +166,16 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		MaximumBytes:    authorization.MaximumBytes,
 	})
 	if err != nil {
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return fmt.Errorf("execute task %q: %w", taskID, err)
+		return w.failAttempt(taskID, lease, now(), fmt.Errorf("execute task %q: %w", taskID, err))
 	}
 	if int64(len(captured.Payload)) > w.MaximumBytes {
 		err = fmt.Errorf("transport returned %d bytes above the %d byte limit", len(captured.Payload), w.MaximumBytes)
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return err
+		return w.failAttempt(taskID, lease, now(), err)
 	}
 
 	attemptID, evidenceID, err := w.Sink.WriteCaptured(ctx, task, lease, captured)
 	if err != nil {
-		_ = w.Tasks.Retry(taskID, w.ID, lease.FencingToken, now(), err)
-		return fmt.Errorf("persist captured evidence for task %q: %w", taskID, err)
+		return w.failAttempt(taskID, lease, now(), fmt.Errorf("persist captured evidence for task %q: %w", taskID, err))
 	}
 	if err := w.Tasks.BeginCommit(taskID, w.ID, lease.FencingToken, now()); err != nil {
 		return err
@@ -191,6 +184,14 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		return fmt.Errorf("commit task %q: %w", taskID, err)
 	}
 	return nil
+}
+
+func (w Worker) failAttempt(taskID string, lease Lease, failedAt time.Time, cause error) error {
+	if retryErr := w.Tasks.Retry(taskID, w.ID, lease.FencingToken, failedAt, cause); retryErr != nil {
+		return errors.Join(cause, fmt.Errorf("return task %q to retry wait: %w", taskID, retryErr))
+	}
+
+	return cause
 }
 
 func randomID(prefix string) (string, error) {
@@ -205,11 +206,11 @@ func randomID(prefix string) (string, error) {
 // will replace it when artefact storage is introduced.
 type MemorySink struct{}
 
-func (MemorySink) WriteCaptured(_ context.Context, task Task, lease Lease, captured transport.CapturedBytes) (string, string, error) {
+func (MemorySink) WriteCaptured(_ context.Context, task Task, lease Lease, captured transport.CapturedBytes) (attemptID, evidenceID string, err error) {
 	if len(captured.Payload) == 0 {
 		return "", "", fmt.Errorf("captured payload is empty")
 	}
-	attemptID := fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
-	evidenceID := fmt.Sprintf("evidence-%s-%x", task.ID, captured.Digest[:8])
+	attemptID = fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
+	evidenceID = fmt.Sprintf("evidence-%s-%x", task.ID, captured.Digest[:8])
 	return attemptID, evidenceID, nil
 }

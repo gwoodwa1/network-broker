@@ -100,8 +100,8 @@ func (s *Store) Add(task Task) error {
 	if task.State != TaskQueued {
 		return fmt.Errorf("%w: new task must be queued", ErrInvalidState)
 	}
-	copy := task
-	s.tasks[task.ID] = &copy
+	taskCopy := task
+	s.tasks[task.ID] = &taskCopy
 	return nil
 }
 

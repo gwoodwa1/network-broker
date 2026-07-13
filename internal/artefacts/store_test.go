@@ -26,7 +26,10 @@ func TestStorePreservesDistinctImmutableLineageObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	got[0] = 'X'
-	again, _ := store.Get(captured.URI)
+	again, err := store.Get(captured.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !bytes.Equal(again, []byte("secret=one")) {
 		t.Fatal("caller mutated stored artefact")
 	}

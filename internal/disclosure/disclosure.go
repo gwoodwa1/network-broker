@@ -82,17 +82,19 @@ func (s *Service) Evaluate(request DecisionRequest) (*Decision, error) {
 		EvaluatedAt: now, ExpiresAt: now.Add(request.TTL),
 	}
 	s.decisions[decision.DecisionID] = decision
-	copy := *decision
-	copy.PermittedFields = append([]string(nil), decision.PermittedFields...)
-	copy.RequiredRedactions = append([]string(nil), decision.RequiredRedactions...)
-	return &copy, nil
+	decisionCopy := *decision
+	decisionCopy.PermittedFields = append([]string(nil), decision.PermittedFields...)
+	decisionCopy.RequiredRedactions = append([]string(nil), decision.RequiredRedactions...)
+	return &decisionCopy, nil
 }
 
 // EvaluateDecision is retained as a local-scaffold convenience.
 func (s *Service) EvaluateDecision(actorID, evidenceID, representation string, permittedFields []string) (*Decision, error) {
-	return s.Evaluate(DecisionRequest{ActorID: actorID, TenantID: "tenant-local", EvidenceID: evidenceID,
+	return s.Evaluate(DecisionRequest{
+		ActorID: actorID, TenantID: "tenant-local", EvidenceID: evidenceID,
 		Representation: representation, PolicyBundleDigest: "policy-local", InputDigest: "input-local",
-		PermittedFields: permittedFields, TTL: 15 * time.Minute})
+		PermittedFields: permittedFields, TTL: 15 * time.Minute,
+	})
 }
 
 // Deliver enforces the stored decision and records the exact released payload.
@@ -139,15 +141,17 @@ func (s *Service) Deliver(decisionID, actorID, tenantID, evidenceID, requestID, 
 	}
 	digest := sha256.Sum256(payload)
 	s.sequence++
-	receipt := &Receipt{ReceiptID: fmt.Sprintf("receipt-%s-%d", decision.EvidenceID, s.sequence), EvidenceID: decision.EvidenceID,
+	receipt := &Receipt{
+		ReceiptID: fmt.Sprintf("receipt-%s-%d", decision.EvidenceID, s.sequence), EvidenceID: decision.EvidenceID,
 		ActorID: decision.ActorID, DisclosureDecisionID: decision.DecisionID, Representation: representation,
 		FieldsDelivered: fieldNames, RedactionsApplied: uniqueSorted(redactions), DeliveredPayloadDigest: hex.EncodeToString(digest[:]),
-		RequestID: requestID, DeliveredAt: now}
+		RequestID: requestID, DeliveredAt: now,
+	}
 	s.receipts[receipt.ReceiptID] = receipt
-	copy := *receipt
-	copy.FieldsDelivered = append([]string(nil), receipt.FieldsDelivered...)
-	copy.RedactionsApplied = append([]string(nil), receipt.RedactionsApplied...)
-	return delivered, &copy, nil
+	receiptCopy := *receipt
+	receiptCopy.FieldsDelivered = append([]string(nil), receipt.FieldsDelivered...)
+	receiptCopy.RedactionsApplied = append([]string(nil), receipt.RedactionsApplied...)
+	return delivered, &receiptCopy, nil
 }
 
 // RecordDelivery validates the legacy field-only delivery shape.

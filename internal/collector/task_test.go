@@ -68,9 +68,16 @@ func TestStoreRejectsDuplicateAcceptedCommit(t *testing.T) {
 	if err := store.Add(Task{ID: "task-1", TargetID: "target-1", RecipeID: "gnmi_interface_get"}); err != nil {
 		t.Fatal(err)
 	}
-	lease, _ := store.Acquire("task-1", "collector-a", now, time.Minute)
-	_ = store.StartExecution("task-1", "collector-a", lease.FencingToken, now)
-	_ = store.BeginCommit("task-1", "collector-a", lease.FencingToken, now)
+	lease, err := store.Acquire("task-1", "collector-a", now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartExecution("task-1", "collector-a", lease.FencingToken, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginCommit("task-1", "collector-a", lease.FencingToken, now); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Commit("task-1", "collector-a", lease.FencingToken, "attempt-1", "evidence-1", now); err != nil {
 		t.Fatal(err)
 	}

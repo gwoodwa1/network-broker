@@ -17,10 +17,12 @@ import (
 func TestPipelineSinkBuildsSignedEnvelopeFromCurrentAttempt(t *testing.T) {
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
 	tasks := collector.NewStore()
-	task := collector.Task{ID: "task-1", TenantID: "tenant-1", ClaimFingerprint: "claim-1", ResolutionID: "resolution-1",
+	task := collector.Task{
+		ID: "task-1", TenantID: "tenant-1", ClaimFingerprint: "claim-1", ResolutionID: "resolution-1",
 		TargetSnapshotID: "snapshot-1", TargetSnapshotHash: "snapshot-hash", TargetID: "target-1",
 		RecipeID: "gnmi_interface_get", RecipeVersion: "v1", TriggerDecisionID: "trigger-1",
-		PlanningDecisionID: "planning-1", CompatibilityHash: "compat-1"}
+		PlanningDecisionID: "planning-1", CompatibilityHash: "compat-1",
+	}
 	if err := tasks.Add(task); err != nil {
 		t.Fatal(err)
 	}
@@ -34,8 +36,14 @@ func TestPipelineSinkBuildsSignedEnvelopeFromCurrentAttempt(t *testing.T) {
 	if err := tasks.RecordExecutionAuthority(task.ID, lease.Owner, lease.FencingToken, "execution-1", "grant-1", now); err != nil {
 		t.Fatal(err)
 	}
-	task, _ = tasks.Get(task.ID)
-	_, private, _ := ed25519.GenerateKey(nil)
+	task, err = tasks.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assembler, err := NewAssembler("v1", private, tasks)
 	if err != nil {
 		t.Fatal(err)

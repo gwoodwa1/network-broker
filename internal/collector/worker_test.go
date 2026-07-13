@@ -56,7 +56,10 @@ func TestWorkerReturnsFailedTransportTaskToRetryWait(t *testing.T) {
 	if err := worker.Run(context.Background(), "task-1"); err == nil {
 		t.Fatal("expected transport failure")
 	}
-	task, _ = store.Get("task-1")
+	task, err := store.Get("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if task.State != TaskRetryWait || task.LastError == "" {
 		t.Fatalf("expected retry_wait with failure detail, got %+v", task)
 	}
@@ -82,7 +85,10 @@ func TestWorkerDoesNotContactTargetWhenExecutionIsDenied(t *testing.T) {
 	if adapter.calls != 0 {
 		t.Fatalf("expected no target contact, got %d calls", adapter.calls)
 	}
-	task, _ := store.Get("task-1")
+	task, getErr := store.Get("task-1")
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
 	if task.State != TaskRetryWait {
 		t.Fatalf("expected denied attempt to return to retry wait, got %s", task.State)
 	}

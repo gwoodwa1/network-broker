@@ -122,8 +122,10 @@ func (a *Assembler) Assemble(input AssemblyInput) (EvidenceEnvelope, error) {
 		ParserID: input.ParserID, ParserVersion: input.ParserVersion, NormaliserVersion: input.NormaliserVersion,
 		Completeness: input.Completeness, ObservedAt: input.Observation.ObservedAt.UTC(), ValidUntil: input.ValidUntil.UTC(),
 		InterfaceState: input.Observation,
-		Attribution: Attribution{CollectorIdentity: input.CollectorIdentity, CollectorVersion: input.CollectorVersion,
-			EvidenceAssemblerVersion: a.version, AuditReference: input.AuditReference, SignatureAlgorithm: "Ed25519"},
+		Attribution: Attribution{
+			CollectorIdentity: input.CollectorIdentity, CollectorVersion: input.CollectorVersion,
+			EvidenceAssemblerVersion: a.version, AuditReference: input.AuditReference, SignatureAlgorithm: "Ed25519",
+		},
 	}
 	unsigned, err := signingPayload(envelope)
 	if err != nil {
@@ -170,9 +172,9 @@ func validateInput(input AssemblyInput) error {
 }
 
 func signingPayload(envelope EvidenceEnvelope) ([]byte, error) {
-	copy := envelope
-	copy.Attribution.Signature = nil
-	payload, err := json.Marshal(copy)
+	envelopeCopy := envelope
+	envelopeCopy.Attribution.Signature = nil
+	payload, err := json.Marshal(envelopeCopy)
 	if err != nil {
 		return nil, fmt.Errorf("encode evidence envelope: %w", err)
 	}

@@ -23,8 +23,10 @@ func TestEvaluateDecisionAndRecordDelivery(t *testing.T) {
 func TestRecordDeliveryRejectsExpiredDecision(t *testing.T) {
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
 	service := NewServiceWithClock(func() time.Time { return now })
-	decision, err := service.Evaluate(DecisionRequest{ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-2",
-		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1", PermittedFields: []string{"interface_state"}, TTL: time.Minute})
+	decision, err := service.Evaluate(DecisionRequest{
+		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-2",
+		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1", PermittedFields: []string{"interface_state"}, TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,9 +40,11 @@ func TestRecordDeliveryRejectsExpiredDecision(t *testing.T) {
 func TestDeliverEnforcesFieldsRepresentationAndRedactions(t *testing.T) {
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
 	service := NewServiceWithClock(func() time.Time { return now })
-	decision, err := service.Evaluate(DecisionRequest{ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
+	decision, err := service.Evaluate(DecisionRequest{
+		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
 		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1",
-		PermittedFields: []string{"interface_name", "operational_state"}, RequiredRedactions: []string{"device_address"}, TTL: time.Minute})
+		PermittedFields: []string{"interface_name", "operational_state"}, RequiredRedactions: []string{"device_address"}, TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +69,11 @@ func TestDeliverEnforcesFieldsRepresentationAndRedactions(t *testing.T) {
 
 func TestDeliverRejectsDecisionUsedByAnotherActor(t *testing.T) {
 	service := NewService()
-	decision, err := service.Evaluate(DecisionRequest{ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
+	decision, err := service.Evaluate(DecisionRequest{
+		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
 		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1",
-		PermittedFields: []string{"operational_state"}, TTL: time.Minute})
+		PermittedFields: []string{"operational_state"}, TTL: time.Minute,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

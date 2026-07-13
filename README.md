@@ -84,6 +84,31 @@ For concurrency checks:
 go test -race ./...
 ```
 
+## Quality checks and containers
+
+Run the pinned lint, test and security toolchain in Docker:
+
+```bash
+docker build --target quality -t network-broker-quality .
+docker run --rm network-broker-quality
+```
+
+To format the code with the same pinned toolchain:
+
+```bash
+docker run --rm -v "$PWD:/src" -w /src network-broker-quality \
+  golangci-lint fmt
+```
+
+Build minimal, non-root runtime images:
+
+```bash
+docker build --target collector -t network-broker-collector .
+docker build --target controlplane -t network-broker-controlplane .
+```
+
+The runtime targets contain only a statically linked binary and the system CA bundle. The `quality` target is intentionally separate and contains the pinned analysis tools defined by the repository.
+
 ## Run the local collector flow
 
 ```bash

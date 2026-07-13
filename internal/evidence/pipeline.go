@@ -36,7 +36,8 @@ type PipelineSink struct {
 
 func NewPipelineSink(store *artefacts.Store, sanitiser sanitise.Pipeline, parser parsing.InterfaceStateParser,
 	assembler *Assembler, transportName, encryptionKeyRef, collectorVersion, normaliserVersion string,
-	validity time.Duration, now func() time.Time) (*PipelineSink, error) {
+	validity time.Duration, now func() time.Time,
+) (*PipelineSink, error) {
 	if store == nil || assembler == nil || transportName == "" || encryptionKeyRef == "" || collectorVersion == "" ||
 		normaliserVersion == "" || validity <= 0 {
 		return nil, fmt.Errorf("pipeline stores, identities, versions and positive validity are required")
@@ -44,12 +45,14 @@ func NewPipelineSink(store *artefacts.Store, sanitiser sanitise.Pipeline, parser
 	if now == nil {
 		now = time.Now
 	}
-	return &PipelineSink{Artefacts: store, Sanitiser: sanitiser, Parser: parser, Assembler: assembler,
+	return &PipelineSink{
+		Artefacts: store, Sanitiser: sanitiser, Parser: parser, Assembler: assembler,
 		TransportName: transportName, EncryptionKeyRef: encryptionKeyRef, CollectorVersion: collectorVersion,
-		NormaliserVersion: normaliserVersion, Validity: validity, Now: now, envelopes: make(map[string]EvidenceEnvelope)}, nil
+		NormaliserVersion: normaliserVersion, Validity: validity, Now: now, envelopes: make(map[string]EvidenceEnvelope),
+	}, nil
 }
 
-func (s *PipelineSink) WriteCaptured(_ context.Context, task collector.Task, lease collector.Lease, captured transport.CapturedBytes) (string, string, error) {
+func (s *PipelineSink) WriteCaptured(_ context.Context, task collector.Task, lease collector.Lease, captured transport.CapturedBytes) (attemptID, evidenceID string, err error) {
 	if captured.TargetID != task.TargetID {
 		return "", "", fmt.Errorf("captured target does not match task target")
 	}
@@ -57,7 +60,7 @@ func (s *PipelineSink) WriteCaptured(_ context.Context, task collector.Task, lea
 		return "", "", fmt.Errorf("captured payload digest does not match transport metadata")
 	}
 	now := s.Now().UTC()
-	attemptID := fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
+	attemptID = fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
 	capturedRef, err := s.Artefacts.PutCaptured(captured.Payload, "application/json", s.TransportName, attemptID, s.EncryptionKeyRef, captured.CapturedAt)
 	if err != nil {
 		return "", "", err

@@ -15,7 +15,7 @@ type Decision struct {
 type Evaluator struct{}
 
 // Evaluate returns a policy decision for a recipe and target class.
-func (e Evaluator) Evaluate(recipeID string, targetClass string) (Decision, error) {
+func (Evaluator) Evaluate(recipeID, targetClass string) (Decision, error) {
 	if recipeID == "" {
 		return Decision{}, fmt.Errorf("recipe id is required")
 	}
