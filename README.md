@@ -2,7 +2,7 @@
 
 Network Broker is a Go prototype for governed, asynchronous collection and disclosure of network evidence. It separates read-only context queries from collection workflows and treats identity, policy, approval, bounded execution, evidence lineage, and retrieval disclosure as distinct security boundaries.
 
-The project currently uses in-memory stores and deterministic local adapters so the core workflow and invariants can be exercised without external infrastructure.
+The local smoke path uses in-memory stores and a deterministic adapter. PostgreSQL repositories, S3-compatible artefact storage, signed policy bundles, durable approvals and bounded network transports are available for integration, but the production runtime profile is not yet fully wired or qualified.
 
 ## What it demonstrates
 
@@ -142,6 +142,8 @@ The resolution workflow now has two repository adapters:
 
 PostgreSQL deployments must apply the versioned scripts in `migrations/` before constructing the repository with an application-owned `*sql.DB`. Reusing an idempotency key with the same actor, tenant, and request digest returns the existing workflow; reusing it for different request content fails closed. See the [resolution idempotency contract](docs/idempotency.md).
 
+Migration `000007_collector_tasks` persists the complete collector task authority record. `collector.PostgresRepository` performs guarded lease, fencing, execution-authority, retry and exactly-one accepted-result updates, while the worker consumes the same context-aware repository boundary as the deterministic memory store. Repository restart tests prove that a live lease survives process loss, an expired lease advances the fencing epoch, and the old attempt cannot assemble or commit evidence. See [durable collector task authority](docs/collector-task-persistence.md).
+
 The control-plane entrypoint requires `DATABASE_URL`, `NATS_URL`, and a deployment-unique `OUTBOX_WORKER_ID`. It verifies PostgreSQL and NATS connectivity before becoming ready and exposes `GET /livez`, `GET /readyz`, and Prometheus-format `GET /metrics` endpoints. Set `APPLY_MIGRATIONS=true` only for an instance authorised to apply the embedded, checksum-verified migrations; concurrent migration attempts are serialised with a PostgreSQL advisory lock. `LISTEN_ADDRESS` defaults to `:8080`.
 
 The NATS stream is provisioned separately from the application and must cover the configured subject. `NATS_STREAM` defaults to `BROKER_EVENTS` and `NATS_SUBJECT` to `network-broker.events`. Production authentication can use `NATS_CREDENTIALS_FILE`; TLS trust and mutual TLS identity can be configured with `NATS_CA_FILE`, `NATS_CERT_FILE`, and `NATS_KEY_FILE`.
@@ -165,6 +167,7 @@ Captured device output is treated as hostile. Versioned deterministic rules boun
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
 - Production runtime wiring for durable object storage and a lifecycle deletion/reconciliation worker.
+- Production task fan-out and collector runtime wiring for the durable collector-task repository.
 - Generated protobuf API contracts and network-facing services.
 - Vendor/release lab qualification and production runtime wiring for the gNMI, NETCONF and SSH adapters.
 - Production activation and administration surfaces for signed policy bundles and approvals.

@@ -47,6 +47,8 @@ type CredentialExchanger interface {
 	ExchangeContext(context.Context, grants.ExecutionGrant, grants.ExchangeRequest) (grants.SessionCredential, error)
 }
 
+const failurePersistenceTimeout = 5 * time.Second
+
 // Worker executes one bounded task attempt.
 type Worker struct {
 	ID              string
@@ -96,12 +98,12 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		MaximumDuration: w.MaximumDuration, MaximumBytes: w.MaximumBytes, EvaluatedAt: now(),
 	})
 	if err != nil {
-		return w.failAttempt(taskID, lease, now(), fmt.Errorf("re-authorize task %q: %w", taskID, err))
+		return w.failAttempt(ctx, taskID, lease, now(), fmt.Errorf("re-authorize task %q: %w", taskID, err))
 	}
 	if authorization.DecisionID == "" || authorization.MaximumDuration <= 0 || authorization.MaximumBytes <= 0 ||
 		authorization.MaximumDuration > w.MaximumDuration || authorization.MaximumBytes > w.MaximumBytes {
 		err := fmt.Errorf("execution authorization returned invalid or expanded limits")
-		return w.failAttempt(taskID, lease, now(), err)
+		return w.failAttempt(ctx, taskID, lease, now(), err)
 	}
 	issuedAt := now()
 	expiresAt := issuedAt.Add(w.GrantTTL)
@@ -110,7 +112,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	}
 	if expiresAt.Before(issuedAt.Add(authorization.MaximumDuration)) {
 		err := fmt.Errorf("lease and grant validity do not cover authorised execution duration")
-		return w.failAttempt(taskID, lease, now(), err)
+		return w.failAttempt(ctx, taskID, lease, now(), err)
 	}
 	grantID, err := randomID("grant")
 	if err != nil {
@@ -131,7 +133,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		MaximumResponseBytes: authorization.MaximumBytes, CredentialClass: "network-read", SingleUse: true,
 	})
 	if err != nil {
-		return w.failAttempt(taskID, lease, now(), fmt.Errorf("issue execution grant for task %q: %w", taskID, err))
+		return w.failAttempt(ctx, taskID, lease, now(), fmt.Errorf("issue execution grant for task %q: %w", taskID, err))
 	}
 	if err := w.Tasks.RecordExecutionAuthorityContext(ctx, taskID, w.ID, lease.FencingToken,
 		authorization.DecisionID, grant.GrantID, now()); err != nil {
@@ -147,12 +149,12 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		FencingToken: lease.FencingToken, Now: now(),
 	})
 	if err != nil {
-		return w.failAttempt(taskID, lease, now(), fmt.Errorf("exchange execution grant for task %q: %w", taskID, err))
+		return w.failAttempt(ctx, taskID, lease, now(), fmt.Errorf("exchange execution grant for task %q: %w", taskID, err))
 	}
 	if credential.Token == "" || credential.GrantID != grant.GrantID || credential.TargetID != task.TargetID ||
 		credential.RecipeID != task.RecipeID || credential.FencingToken != lease.FencingToken {
 		err := fmt.Errorf("credential broker returned mismatched credential")
-		return w.failAttempt(taskID, lease, now(), err)
+		return w.failAttempt(ctx, taskID, lease, now(), err)
 	}
 
 	executionCtx, cancel := context.WithTimeout(ctx, authorization.MaximumDuration)
@@ -167,16 +169,16 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 		MaximumBytes:    authorization.MaximumBytes,
 	})
 	if err != nil {
-		return w.failAttempt(taskID, lease, now(), fmt.Errorf("execute task %q: %w", taskID, err))
+		return w.failAttempt(ctx, taskID, lease, now(), fmt.Errorf("execute task %q: %w", taskID, err))
 	}
 	if int64(len(captured.Payload)) > w.MaximumBytes {
 		err = fmt.Errorf("transport returned %d bytes above the %d byte limit", len(captured.Payload), w.MaximumBytes)
-		return w.failAttempt(taskID, lease, now(), err)
+		return w.failAttempt(ctx, taskID, lease, now(), err)
 	}
 
 	attemptID, evidenceID, err := w.Sink.WriteCaptured(ctx, task, lease, captured)
 	if err != nil {
-		return w.failAttempt(taskID, lease, now(), fmt.Errorf("persist captured evidence for task %q: %w", taskID, err))
+		return w.failAttempt(ctx, taskID, lease, now(), fmt.Errorf("persist captured evidence for task %q: %w", taskID, err))
 	}
 	if err := w.Tasks.BeginCommitContext(ctx, taskID, w.ID, lease.FencingToken, now()); err != nil {
 		return err
@@ -187,8 +189,10 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	return nil
 }
 
-func (w Worker) failAttempt(taskID string, lease Lease, failedAt time.Time, cause error) error {
-	if retryErr := w.Tasks.RetryContext(context.Background(), taskID, w.ID, lease.FencingToken,
+func (w Worker) failAttempt(ctx context.Context, taskID string, lease Lease, failedAt time.Time, cause error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failurePersistenceTimeout)
+	defer cancel()
+	if retryErr := w.Tasks.RetryContext(cleanupCtx, taskID, w.ID, lease.FencingToken,
 		failedAt, cause); retryErr != nil {
 		return errors.Join(cause, fmt.Errorf("return task %q to retry wait: %w", taskID, retryErr))
 	}

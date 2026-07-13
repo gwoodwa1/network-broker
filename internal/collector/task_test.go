@@ -2,12 +2,19 @@ package collector
 
 import (
 	"crypto/ed25519"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"network_broker/internal/grants"
 )
+
+func TestNewPostgresRepositoryRejectsNilDatabase(t *testing.T) {
+	if _, err := NewPostgresRepository((*sql.DB)(nil)); err == nil {
+		t.Fatal("expected a nil collector task database to fail")
+	}
+}
 
 func TestStoreAcquireRenewAndCommit(t *testing.T) {
 	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)

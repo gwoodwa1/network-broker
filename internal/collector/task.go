@@ -191,6 +191,8 @@ func (s *Store) Acquire(taskID, owner string, now time.Time, duration time.Durat
 	task.LeaseExpiry = now.Add(duration)
 	task.FencingToken++
 	task.AttemptCount++
+	task.ExecutionDecisionID = ""
+	task.ExecutionGrantID = ""
 	task.LastError = ""
 	return leaseFor(task), nil
 }
@@ -291,7 +293,7 @@ func (s *Store) Retry(taskID, owner string, token int64, now time.Time, cause er
 	task.LeaseOwner = ""
 	task.LeaseExpiry = time.Time{}
 	if cause != nil {
-		task.LastError = cause.Error()
+		task.LastError = boundedError(cause.Error())
 	}
 	return nil
 }

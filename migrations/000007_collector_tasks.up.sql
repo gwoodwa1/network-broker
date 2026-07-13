@@ -31,6 +31,29 @@ CREATE TABLE broker_collector_tasks (
     )),
     CONSTRAINT broker_collector_tasks_attempt_count CHECK (attempt_count >= 0),
     CONSTRAINT broker_collector_tasks_fencing_token CHECK (fencing_token >= 0),
+    CONSTRAINT broker_collector_tasks_required_identity CHECK (
+        char_length(id) BETWEEN 1 AND 512 AND
+        char_length(tenant_id) BETWEEN 1 AND 512 AND
+        char_length(resolution_id) BETWEEN 1 AND 512 AND
+        char_length(claim_fingerprint) BETWEEN 1 AND 512 AND
+        char_length(target_snapshot_id) BETWEEN 1 AND 512 AND
+        char_length(target_snapshot_hash) BETWEEN 1 AND 512 AND
+        char_length(target_id) BETWEEN 1 AND 512 AND
+        char_length(recipe_id) BETWEEN 1 AND 512 AND
+        char_length(recipe_version) BETWEEN 1 AND 512 AND
+        char_length(trigger_decision_id) BETWEEN 1 AND 512 AND
+        char_length(planning_decision_id) BETWEEN 1 AND 512 AND
+        char_length(compatibility_hash) BETWEEN 1 AND 512
+    ),
+    CONSTRAINT broker_collector_tasks_optional_identity CHECK (
+        (target_endpoint IS NULL OR char_length(target_endpoint) BETWEEN 1 AND 2048) AND
+        (execution_decision_id IS NULL OR char_length(execution_decision_id) BETWEEN 1 AND 512) AND
+        (execution_grant_id IS NULL OR char_length(execution_grant_id) BETWEEN 1 AND 512) AND
+        (approval_grant_id IS NULL OR char_length(approval_grant_id) BETWEEN 1 AND 512) AND
+        (lease_owner IS NULL OR char_length(lease_owner) BETWEEN 1 AND 512) AND
+        (accepted_attempt_id IS NULL OR char_length(accepted_attempt_id) BETWEEN 1 AND 512) AND
+        (accepted_evidence_id IS NULL OR char_length(accepted_evidence_id) BETWEEN 1 AND 512)
+    ),
     CONSTRAINT broker_collector_tasks_authority_pair CHECK (
         (execution_decision_id IS NULL) = (execution_grant_id IS NULL)
     ),
