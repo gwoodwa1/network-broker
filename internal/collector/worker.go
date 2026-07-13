@@ -63,7 +63,7 @@ type Worker struct {
 	Now             func() time.Time
 }
 
-//nolint:cyclop,funlen // Run deliberately keeps the security-sensitive attempt sequence linear and auditable.
+//nolint:cyclop,funlen,gocognit // Run deliberately keeps the security-sensitive attempt sequence linear and auditable.
 func (w Worker) Run(ctx context.Context, taskID string) error {
 	if w.ID == "" || w.Tasks == nil || w.Transport == nil || w.Sink == nil {
 		return fmt.Errorf("collector id, task store, transport and captured sink are required")

@@ -107,7 +107,7 @@ docker build --target collector -t network-broker-collector .
 docker build --target controlplane -t network-broker-controlplane .
 ```
 
-The runtime targets contain only a statically linked binary and the system CA bundle. The `quality` target is intentionally separate and contains the pinned analysis tools defined by the repository.
+The quality gate verifies module tidiness and integrity, builds every package, enforces the repository dependency policy, runs strict linting and formatting checks, executes race-enabled tests, and scans with `gosec` and `govulncheck`. The runtime targets contain only a statically linked binary and the system CA bundle. The `quality` target is intentionally separate and contains the pinned analysis tools defined by the repository.
 
 ## Run the local collector flow
 

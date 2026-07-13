@@ -153,13 +153,18 @@ func (a *Assembler) Verify(envelope EvidenceEnvelope) error {
 }
 
 func validateInput(input AssemblyInput) error {
-	if input.TenantID == "" || input.ClaimFingerprint == "" || input.TaskID == "" || input.TargetSnapshotID == "" ||
-		input.TargetID == "" || input.RecipeID == "" || input.RecipeVersion == "" || input.TriggerDecisionID == "" ||
-		input.PlanningDecisionID == "" || input.ExecutionDecisionID == "" ||
-		input.ExecutionGrantID == "" || input.AcceptedAttemptID == "" || input.CompatibilityRecordHash == "" ||
-		input.ParserID == "" || input.ParserVersion == "" || input.NormaliserVersion == "" || input.CollectorIdentity == "" ||
-		input.CollectorVersion == "" || input.AuditReference == "" {
-		return fmt.Errorf("evidence identity, lineage and attribution fields are required")
+	required := []string{
+		input.TenantID, input.ClaimFingerprint, input.TaskID, input.TargetSnapshotID,
+		input.TargetID, input.RecipeID, input.RecipeVersion, input.TriggerDecisionID,
+		input.PlanningDecisionID, input.ExecutionDecisionID, input.ExecutionGrantID,
+		input.AcceptedAttemptID, input.CompatibilityRecordHash, input.ParserID,
+		input.ParserVersion, input.NormaliserVersion, input.CollectorIdentity,
+		input.CollectorVersion, input.AuditReference,
+	}
+	for _, value := range required {
+		if value == "" {
+			return fmt.Errorf("evidence identity, lineage and attribution fields are required")
+		}
 	}
 	if input.FencingToken <= 0 || input.Completeness < 0 || input.Completeness > 1 || input.AssembledAt.IsZero() ||
 		input.ValidUntil.IsZero() || !input.ValidUntil.After(input.Observation.ObservedAt) {

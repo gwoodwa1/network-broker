@@ -63,6 +63,8 @@ func main() {
 
 // run is a local collector-process scaffold. Durable queue and artefact-store
 // adapters can replace the in-memory implementations without changing Worker.
+//
+//nolint:funlen // Keeping the demo wiring together makes its end-to-end security flow directly inspectable.
 func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("collector", flag.ContinueOnError)
 	flags.SetOutput(stderr)

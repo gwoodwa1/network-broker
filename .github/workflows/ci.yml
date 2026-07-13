@@ -38,6 +38,15 @@ jobs:
             exit 1
           fi
 
+      - name: Check module tidiness
+        run: go mod tidy -diff
+
+      - name: Verify module content
+        run: go mod verify
+
+      - name: Build all packages
+        run: go build -trimpath ./...
+
       - name: Vet
         run: go vet ./...
 

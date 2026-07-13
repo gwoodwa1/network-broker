@@ -19,6 +19,9 @@ run_check() {
 }
 
 run_check "golangci-lint configuration" golangci-lint config verify
+run_check "module tidiness" go mod tidy -diff
+run_check "module integrity" go mod verify
+run_check "build all packages" go build -trimpath ./...
 run_check "golangci-lint" golangci-lint run
 run_check "unit and race tests" go test -race -count=1 ./...
 run_check "gosec" gosec ./...
