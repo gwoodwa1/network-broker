@@ -123,7 +123,7 @@ jobs:
           cache: false
 
       - name: Run gosec
-        uses: securego/gosec@v2.25.0
+        uses: securego/gosec@v2.27.1
         with:
           args: ./cmd/... ./internal/... ./migrations
 
