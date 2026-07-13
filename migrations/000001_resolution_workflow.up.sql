@@ -1,5 +1,3 @@
-BEGIN;
-
 CREATE TABLE broker_resolutions (
     id TEXT PRIMARY KEY,
     actor_id TEXT NOT NULL,
@@ -52,5 +50,3 @@ CREATE TABLE broker_outbox (
 CREATE INDEX broker_outbox_pending_idx
     ON broker_outbox (sequence)
     WHERE published_at IS NULL;
-
-COMMIT;

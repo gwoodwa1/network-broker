@@ -72,7 +72,7 @@ migrations/        PostgreSQL schema and rollback migrations
 
 ## Requirements
 
-- Go 1.22 or newer
+- Go 1.25 or newer
 
 ## Run the tests
 
@@ -140,11 +140,15 @@ The resolution workflow now has two repository adapters:
 
 PostgreSQL deployments must apply the versioned scripts in `migrations/` before constructing the repository with an application-owned `*sql.DB`. Reusing an idempotency key with the same actor, tenant, and request digest returns the existing workflow; reusing it for different request content fails closed.
 
+The control-plane entrypoint now requires `DATABASE_URL`, verifies connectivity before becoming available, and exposes `GET /livez` and `GET /readyz` for orchestration probes. Set `APPLY_MIGRATIONS=true` only for an instance authorised to apply the embedded, checksum-verified migrations; concurrent migration attempts are serialised with a PostgreSQL advisory lock. `LISTEN_ADDRESS` defaults to `:8080`.
+
+Outbox dispatchers use ordered `FOR UPDATE SKIP LOCKED` claims, expiring worker leases, bounded retry scheduling, and terminal dead-letter state. Publishers must deduplicate on the immutable event ID because delivery is intentionally at least once.
+
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
-- Production database bootstrap, migration deployment, outbox dispatch, and durable object storage.
+- A production event-broker publisher, dead-letter operations workflow, and durable object storage.
 - Generated protobuf API contracts and network-facing services.
 - Production gNMI, NETCONF, or SSH transport implementations.
 - External policy bundles and approval persistence.
