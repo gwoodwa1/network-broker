@@ -128,7 +128,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	worker := collector.Worker{
 		ID:              *collectorID,
 		Tasks:           store,
-		Transport:       transport.StubAdapter{Payload: stubPayload},
+		Transport:       transport.StubAdapter{Payload: stubPayload, MediaType: "application/json"},
 		Sink:            pipelineSink,
 		Authorizer:      catalogueAuthorizer{},
 		GrantIssuer:     authority,

@@ -86,7 +86,8 @@ func TestGNMIAdapterExecutesOnlyAllowlistedPathWithStrictTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(captured.Payload) == 0 || resolver.protocol != ProtocolGNMI || dialer.request == nil ||
-		len(dialer.request.Path) != 1 || dialer.request.Path[0].Elem[0].Name != "interfaces" {
+		len(dialer.request.Path) != 1 || dialer.request.Path[0].Elem[0].Name != "interfaces" ||
+		captured.MediaType != "application/json" {
 		t.Fatalf("unexpected bounded gNMI request or response: request=%+v captured=%+v", dialer.request, captured)
 	}
 	if dialer.tlsConfiguration.MinVersion != tls.VersionTLS13 ||

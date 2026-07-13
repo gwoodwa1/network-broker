@@ -108,7 +108,8 @@ func (a *NETCONFAdapter) Execute(ctx context.Context, target TargetConnection,
 	payload = bytes.Clone(payload)
 
 	return CapturedBytes{
-		TargetID: target.TargetID, Payload: payload, Digest: sha256.Sum256(payload), CapturedAt: a.now().UTC(),
+		TargetID: target.TargetID, Payload: payload, Digest: sha256.Sum256(payload),
+		MediaType: "application/xml", CapturedAt: a.now().UTC(),
 	}, nil
 }
 

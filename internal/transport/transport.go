@@ -32,6 +32,7 @@ type CapturedBytes struct {
 	TargetID   string
 	Payload    []byte
 	Digest     [sha256.Size]byte
+	MediaType  string
 	CapturedAt time.Time
 }
 
@@ -42,8 +43,9 @@ type Adapter interface {
 
 // StubAdapter is deterministic and supports local end-to-end collector tests.
 type StubAdapter struct {
-	Now     func() time.Time
-	Payload []byte
+	Now       func() time.Time
+	Payload   []byte
+	MediaType string
 }
 
 func (a StubAdapter) Execute(ctx context.Context, target TargetConnection, operation BoundedOperation) (CapturedBytes, error) {
@@ -79,11 +81,16 @@ func (a StubAdapter) Execute(ctx context.Context, target TargetConnection, opera
 	if int64(len(payload)) > operation.MaximumBytes {
 		return CapturedBytes{}, fmt.Errorf("transport response exceeds %d byte limit", operation.MaximumBytes)
 	}
+	mediaType := a.MediaType
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
 	copyPayload := append([]byte(nil), payload...)
 	return CapturedBytes{
 		TargetID:   target.TargetID,
 		Payload:    copyPayload,
 		Digest:     sha256.Sum256(copyPayload),
+		MediaType:  mediaType,
 		CapturedAt: executedAt.UTC(),
 	}, nil
 }

@@ -45,6 +45,13 @@ only the captured object, safe marker derivative and transformation manifest rem
 
 The interface-state parser promotes only its exact schema and rejects unknown fields, including caller-supplied taint metadata. It independently marks `interface_name` as device-controlled and requires the sanitisation manifest to carry the matching path. Taint follows the typed observation into the signed evidence envelope, retrieval result and signed disclosure receipt.
 
+Promotion is manifest-aware only. The parser requires the versioned manifest, verifies that its derivative digest
+matches the exact bytes being parsed, and accepts only the recipe's allowlisted `application/json` media type.
+The interface identifier has a bounded identifier grammar, so Markdown tables, fake tool envelopes and other
+rendered structures cannot be promoted as an interface name even when the sanitiser correctly retained them
+as tainted data. gNMI, NETCONF and SSH captures preserve their actual JSON, XML or text media types; a parser
+cannot silently relabel an unsupported representation.
+
 Disclosure policy denies tainted fields by default. An actor-specific decision must explicitly allow them;
 when it does, the signed receipt carries the delivered taint paths, a mandatory consumer warning and a
 human-readable sanitisation summary. Clean deliveries also carry a signed summary stating that no tainted

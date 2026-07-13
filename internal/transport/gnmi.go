@@ -131,7 +131,8 @@ func (a *GNMIAdapter) Execute(ctx context.Context, target TargetConnection,
 	capturedAt := a.now().UTC()
 
 	return CapturedBytes{
-		TargetID: target.TargetID, Payload: payload, Digest: sha256.Sum256(payload), CapturedAt: capturedAt,
+		TargetID: target.TargetID, Payload: payload, Digest: sha256.Sum256(payload),
+		MediaType: "application/json", CapturedAt: capturedAt,
 	}, nil
 }
 

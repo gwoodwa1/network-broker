@@ -100,7 +100,8 @@ func (a *SSHAdapter) Execute(ctx context.Context, target TargetConnection,
 	payload = append([]byte(nil), payload...)
 
 	return CapturedBytes{
-		TargetID: target.TargetID, Payload: payload, Digest: sha256.Sum256(payload), CapturedAt: a.now().UTC(),
+		TargetID: target.TargetID, Payload: payload, Digest: sha256.Sum256(payload),
+		MediaType: "text/plain; charset=utf-8", CapturedAt: a.now().UTC(),
 	}, nil
 }
 

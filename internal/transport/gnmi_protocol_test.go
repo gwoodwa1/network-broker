@@ -79,7 +79,7 @@ func TestGRPCGNMIDialerPerformsVerifiedTLSProtocolExchange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(captured.Payload) == 0 {
+	if len(captured.Payload) == 0 || captured.MediaType != "application/json" {
 		t.Fatal("expected captured gNMI protocol response")
 	}
 }

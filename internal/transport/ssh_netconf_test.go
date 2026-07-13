@@ -63,7 +63,7 @@ func TestSSHAdapterUsesCatalogueCommandAndOpaqueCredentialResolver(t *testing.T)
 		t.Fatal(err)
 	}
 	if dialer.command != "show interface Ethernet1" || string(captured.Payload) != "Ethernet1 is up" ||
-		resolver.protocol != ProtocolSSH {
+		resolver.protocol != ProtocolSSH || captured.MediaType != "text/plain; charset=utf-8" {
 		t.Fatalf("SSH execution escaped catalogue boundary: command=%q captured=%q", dialer.command, captured.Payload)
 	}
 	if _, err := NewSSHAdapter([]SSHRecipe{{ID: "bad", Version: "v1", Command: "show clock\nreload"}},
@@ -94,7 +94,8 @@ func TestNETCONFAdapterUsesReadOnlyCatalogueFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dialer.filter != filter || len(captured.Payload) == 0 || resolver.protocol != ProtocolNETCONF {
+	if dialer.filter != filter || len(captured.Payload) == 0 || resolver.protocol != ProtocolNETCONF ||
+		captured.MediaType != "application/xml" {
 		t.Fatalf("NETCONF execution escaped catalogue boundary: filter=%q", dialer.filter)
 	}
 	if _, err := NewNETCONFAdapter([]NETCONFRecipe{{

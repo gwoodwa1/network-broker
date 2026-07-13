@@ -74,13 +74,16 @@ func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, l
 	if sha256.Sum256(captured.Payload) != captured.Digest {
 		return "", "", fmt.Errorf("captured payload digest does not match transport metadata")
 	}
+	if captured.MediaType == "" {
+		return "", "", fmt.Errorf("captured payload media type is required")
+	}
 	now := s.Now().UTC()
 	attemptID = fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
 	encryptionKeyRef, err := s.EncryptionKeys.CurrentEncryptionKey(ctx, task.TenantID, "captured-artefact")
 	if err != nil {
 		return "", "", fmt.Errorf("resolve captured artefact encryption key: %w", err)
 	}
-	capturedRef, err := s.Artefacts.PutCapturedForTenant(ctx, task.TenantID, captured.Payload, "application/json",
+	capturedRef, err := s.Artefacts.PutCapturedForTenant(ctx, task.TenantID, captured.Payload, captured.MediaType,
 		s.TransportName, attemptID, encryptionKeyRef, captured.CapturedAt)
 	if err != nil {
 		return "", "", err
@@ -89,15 +92,19 @@ func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, l
 	if err != nil {
 		return "", "", err
 	}
+	sanitisedMediaType := captured.MediaType
+	if manifest.Quarantined {
+		sanitisedMediaType = "application/json"
+	}
 	sanitisedRef, err := s.Artefacts.PutSanitisedForTenant(ctx, task.TenantID, sanitisedPayload,
-		"application/json", capturedRef, manifest, now)
+		sanitisedMediaType, capturedRef, manifest, now)
 	if err != nil {
 		return "", "", err
 	}
 	if manifest.Quarantined {
 		return "", "", fmt.Errorf("sanitised artefact %q: %w", sanitisedRef.URI, sanitise.ErrQuarantined)
 	}
-	observation, err := s.Parser.ParseWithManifest(sanitisedPayload, manifest)
+	observation, err := s.Parser.ParseWithManifest(sanitisedPayload, sanitisedRef.MediaType, manifest)
 	if err != nil {
 		return "", "", err
 	}

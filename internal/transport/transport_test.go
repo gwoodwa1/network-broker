@@ -19,7 +19,8 @@ func TestStubAdapterExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected execute to succeed, got %v", err)
 	}
-	if result.TargetID != "target-1" || string(result.Payload) != "ok" {
+	if result.TargetID != "target-1" || string(result.Payload) != "ok" ||
+		result.MediaType != "application/octet-stream" {
 		t.Fatalf("unexpected captured result: %+v", result)
 	}
 	if result.Digest != sha256.Sum256([]byte("ok")) || !result.CapturedAt.Equal(now) {

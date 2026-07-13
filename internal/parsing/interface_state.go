@@ -3,11 +3,14 @@ package parsing
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
 	"time"
+	"unicode"
 
 	"network_broker/internal/artefacts"
 )
@@ -25,7 +28,7 @@ type InterfaceStateParser struct {
 	Version string
 }
 
-func (p InterfaceStateParser) Parse(payload []byte) (InterfaceOperationalState, error) {
+func (p InterfaceStateParser) parse(payload []byte) (InterfaceOperationalState, error) {
 	if p.ID == "" || p.Version == "" || len(payload) == 0 {
 		return InterfaceOperationalState{}, fmt.Errorf("parser identity and payload are required")
 	}
@@ -44,7 +47,7 @@ func (p InterfaceStateParser) Parse(payload []byte) (InterfaceOperationalState, 
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return InterfaceOperationalState{}, fmt.Errorf("observation must contain exactly one JSON value")
 	}
-	if wire.SchemaVersion != "v1" || wire.InterfaceName == "" || wire.ObservedAt.IsZero() {
+	if wire.SchemaVersion != "v1" || !validInterfaceName(wire.InterfaceName) || wire.ObservedAt.IsZero() {
 		return InterfaceOperationalState{}, fmt.Errorf("observation does not satisfy interface operational state v1 schema")
 	}
 	switch wire.OperationalState {
@@ -60,13 +63,43 @@ func (p InterfaceStateParser) Parse(payload []byte) (InterfaceOperationalState, 
 }
 
 func (p InterfaceStateParser) ParseWithManifest(payload []byte,
+	mediaType string,
 	manifest artefacts.TransformationManifest,
 ) (InterfaceOperationalState, error) {
+	if mediaType != "application/json" {
+		return InterfaceOperationalState{}, fmt.Errorf("interface state requires application/json, got %q", mediaType)
+	}
 	if manifest.Quarantined {
 		return InterfaceOperationalState{}, fmt.Errorf("quarantined payload cannot be promoted to typed evidence")
 	}
-	if manifest.RulesVersion == "" || !slices.Contains(manifest.TaintedFields, "$/interface_name") {
+	outputDigest := sha256.Sum256(payload)
+	if manifest.ManifestVersion != artefacts.TransformationManifestVersionV1 || manifest.RulesVersion == "" ||
+		!validSHA256Digest(manifest.InputDigest) ||
+		manifest.OutputDigest != hex.EncodeToString(outputDigest[:]) || manifest.OverallStatus != "tainted" ||
+		!slices.Contains(manifest.TaintedFields, "$/interface_name") {
 		return InterfaceOperationalState{}, fmt.Errorf("sanitisation manifest does not classify interface_name as tainted")
 	}
-	return p.Parse(payload)
+	return p.parse(payload)
+}
+
+func validSHA256Digest(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size
+}
+
+func validInterfaceName(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, char := range value {
+		if unicode.IsLetter(char) || unicode.IsDigit(char) ||
+			char == '-' || char == '_' || char == '.' || char == ':' || char == '/' || char == '[' || char == ']' {
+			continue
+		}
+		return false
+	}
+	return true
 }
