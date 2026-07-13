@@ -1,6 +1,10 @@
 package resolution
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
 
 // ResolutionState models the lifecycle of an evidence resolution.
 type ResolutionState string
@@ -18,30 +22,71 @@ const (
 	ResolutionExpired          ResolutionState = "expired"
 )
 
-// Resolution captures the durable state for an evidence resolution workflow.
-type Resolution struct {
-	ID          string
-	ActorID     string
-	TenantID    string
-	State       ResolutionState
-	TargetCount int
-	Completed   bool
+var (
+	ErrNotFound            = errors.New("resolution not found")
+	ErrVersionConflict     = errors.New("resolution version conflict")
+	ErrIdempotencyConflict = errors.New("idempotency key was reused for a different request")
+	ErrInvalidTransition   = errors.New("resolution state transition is invalid")
+)
+
+var allowedTransitions = map[ResolutionState]map[ResolutionState]struct{}{
+	ResolutionReceived: {
+		ResolutionResolvingTargets: {}, ResolutionDenied: {}, ResolutionFailed: {}, ResolutionCancelled: {}, ResolutionExpired: {},
+	},
+	ResolutionResolvingTargets: {
+		ResolutionPlanning: {}, ResolutionDenied: {}, ResolutionFailed: {}, ResolutionCancelled: {}, ResolutionExpired: {},
+	},
+	ResolutionPlanning: {
+		ResolutionQueued: {}, ResolutionDenied: {}, ResolutionFailed: {}, ResolutionCancelled: {}, ResolutionExpired: {},
+	},
+	ResolutionQueued: {
+		ResolutionComplete: {}, ResolutionPartial: {}, ResolutionFailed: {}, ResolutionCancelled: {}, ResolutionExpired: {},
+	},
 }
 
-// Transition validates and applies a state change.
-func (r *Resolution) Transition(next ResolutionState) error {
-	if r == nil {
-		return fmt.Errorf("resolution is nil")
+// Resolution captures durable state for an evidence-resolution workflow.
+type Resolution struct {
+	ID             string
+	ActorID        string
+	TenantID       string
+	IdempotencyKey string
+	RequestDigest  string
+	State          ResolutionState
+	TargetCount    int
+	Completed      bool
+	Version        int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// Terminal reports whether no further workflow transition is permitted.
+func (s ResolutionState) Terminal() bool {
+	switch s {
+	case ResolutionComplete, ResolutionPartial, ResolutionDenied, ResolutionFailed,
+		ResolutionCancelled, ResolutionExpired:
+		return true
+	default:
+		return false
 	}
-	if r.State == "" {
-		r.State = ResolutionReceived
-	}
+}
+
+// ValidateTransition enforces the workflow graph before a repository performs
+// its compare-and-set update.
+func ValidateTransition(current, next ResolutionState) error {
 	if next == "" {
-		return fmt.Errorf("next state is required")
+		return fmt.Errorf("%w: next state is required", ErrInvalidTransition)
 	}
-	r.State = next
-	if next == ResolutionComplete || next == ResolutionPartial || next == ResolutionDenied || next == ResolutionFailed || next == ResolutionCancelled || next == ResolutionExpired {
-		r.Completed = true
+	if current.Terminal() {
+		return fmt.Errorf("%w: terminal state %q cannot transition", ErrInvalidTransition, current)
 	}
+
+	nextStates, known := allowedTransitions[current]
+	if !known {
+		return fmt.Errorf("%w: unknown current state %q", ErrInvalidTransition, current)
+	}
+	if _, allowed := nextStates[next]; !allowed {
+		return fmt.Errorf("%w: %q to %q", ErrInvalidTransition, current, next)
+	}
+
 	return nil
 }

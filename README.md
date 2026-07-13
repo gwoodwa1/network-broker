@@ -60,12 +60,14 @@ internal/
   evidence/        Signed envelopes and the evidence pipeline
   grants/          Signed execution grants and credential exchange
   inventory/       Tenant-scoped immutable target snapshots
+  outbox/          Transactional workflow event contracts
   parsing/         Concrete observation parsing and validation
   policy/          Collection and recipe policy evaluation
   resolution/      Idempotent resolution lifecycle
   retrieval/       Selective normalised evidence retrieval
   sanitise/        Versioned redaction and bounded transformation
   transport/       Narrow bounded transport adapter contract
+migrations/        PostgreSQL schema and rollback migrations
 ```
 
 ## Requirements
@@ -129,11 +131,20 @@ The command runs a deterministic local workflow that:
 
 It prints the terminal task state and accepted evidence identifier as JSON.
 
+## Resolution persistence
+
+The resolution workflow now has two repository adapters:
+
+- `MemoryRepository` is a concurrency-safe reference implementation for tests and local development.
+- `PostgresRepository` uses tenant-scoped compare-and-set updates and commits resolution state, idempotency records, and outbox events in the same database transaction.
+
+PostgreSQL deployments must apply the versioned scripts in `migrations/` before constructing the repository with an application-owned `*sql.DB`. Reusing an idempotency key with the same actor, tenant, and request digest returns the existing workflow; reusing it for different request content fails closed.
+
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
-- Durable database, object-store, and transactional outbox adapters.
+- Production database bootstrap, migration deployment, outbox dispatch, and durable object storage.
 - Generated protobuf API contracts and network-facing services.
 - Production gNMI, NETCONF, or SSH transport implementations.
 - External policy bundles and approval persistence.
