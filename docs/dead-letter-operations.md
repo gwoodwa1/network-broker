@@ -25,6 +25,16 @@ If the four settings are absent, the control plane continues serving its non-ope
 
 All responses exclude the event payload and raw broker error because either may contain sensitive network data or secrets.
 
+The operator routes are mounted only when the control plane is configured with server TLS, an operator client CA, and a SPIFFE trust domain. The handlers enforce these contract details:
+
+- A request that reaches the handler without an acceptable verified operator identity returns `401 Unauthorized`. A certificate rejected by TLS verification fails the handshake before an HTTP response exists.
+- Requests without the required operator role or scopes return `403 Forbidden`.
+- Missing or cross-tenant resources return `404 Not Found`.
+- Reusing the same idempotency key for another event returns `409 Conflict`.
+- Invalid pagination, replay input, or malformed JSON return `400 Bad Request`.
+
+The list endpoint returns a JSON object with `entries` and an optional `next_cursor`. The replay endpoint accepts a single JSON document with a mandatory `reason` field and returns a JSON body describing the replay action.
+
 ### List
 
 ```http
@@ -62,6 +72,16 @@ Replay performs the following in one PostgreSQL transaction:
 5. Commits one append-only audit action.
 
 The audit table rejects `UPDATE` and `DELETE`. Reusing the same key for the same event returns the original action without another replay. Reusing it for another event returns `409`.
+
+## Implementation checklist
+
+If this contract is implemented or extended, the work should preserve these invariants:
+
+1. Register the operator routes only after the server is configured for mTLS and the authenticator is built from the verified SPIFFE identity.
+2. Keep replay idempotency scoped to the tenant and actor, and require the same event ID and reason to reuse the same action.
+3. Perform the replay transition inside one PostgreSQL transaction, including the audit insert and the outbox requeue update.
+4. Treat the operator surface as secret-safe and avoid including payloads, raw errors, or credentials in responses or logs.
+5. Expose the replay counters in `/metrics` so operators can observe applied, idempotent, and denied attempts.
 
 ## Operational cautions
 

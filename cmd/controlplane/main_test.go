@@ -90,6 +90,26 @@ func TestMetricsEndpointExposesOutboxCounters(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointExposesDeadLetterOperatorCounters(t *testing.T) {
+	api := testDeadLetterAPI(t, &deadLetterRepositoryStub{}, operatorAuthenticatorStub{actor: testOperatorActor()})
+	api.metrics.replayApplied.Add(2)
+	api.metrics.replayIdempotent.Add(3)
+	api.metrics.denied.Add(4)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", http.NoBody)
+	response := httptest.NewRecorder()
+	app := &application{metrics: &outbox.Metrics{}, deadLetters: api}
+	app.routes().ServeHTTP(response, request)
+	for _, metric := range []string{
+		"network_broker_dead_letter_replay_applied_total 2",
+		"network_broker_dead_letter_replay_idempotent_total 3",
+		"network_broker_dead_letter_operator_denied_total 4",
+	} {
+		if !strings.Contains(response.Body.String(), metric) {
+			t.Errorf("missing metric %q in %q", metric, response.Body.String())
+		}
+	}
+}
+
 func TestOutboxRetryDelayIsBounded(t *testing.T) {
 	if outboxRetryDelay(1) != time.Second || outboxRetryDelay(3) != 4*time.Second ||
 		outboxRetryDelay(100) != 5*time.Minute {

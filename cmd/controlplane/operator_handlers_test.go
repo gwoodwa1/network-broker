@@ -24,15 +24,21 @@ func (a operatorAuthenticatorStub) Authenticate(*http.Request) (authctx.AuthCont
 }
 
 type deadLetterRepositoryStub struct {
-	entries []deadletter.Entry
-	replay  deadletter.ReplayResult
+	entries   []deadletter.Entry
+	replay    deadletter.ReplayResult
+	listErr   error
+	getErr    error
+	replayErr error
 }
 
 func (r *deadLetterRepositoryStub) List(context.Context, string, int64, int) ([]deadletter.Entry, error) {
-	return append([]deadletter.Entry(nil), r.entries...), nil
+	return append([]deadletter.Entry(nil), r.entries...), r.listErr
 }
 
 func (r *deadLetterRepositoryStub) Get(_ context.Context, _, eventID string) (deadletter.Entry, error) {
+	if r.getErr != nil {
+		return deadletter.Entry{}, r.getErr
+	}
 	for _, entry := range r.entries {
 		if entry.EventID == eventID {
 			return entry, nil
@@ -43,7 +49,7 @@ func (r *deadLetterRepositoryStub) Get(_ context.Context, _, eventID string) (de
 }
 
 func (r *deadLetterRepositoryStub) Replay(context.Context, deadletter.ReplayCommand) (deadletter.ReplayResult, error) {
-	return r.replay, nil
+	return r.replay, r.replayErr
 }
 
 func TestDeadLetterAPIFailsClosedWithoutVerifiedIdentity(t *testing.T) {
@@ -102,6 +108,105 @@ func TestDeadLetterAPIReplaysWithStrictBodyAndIdempotency(t *testing.T) {
 	mux.ServeHTTP(badResponse, badRequest)
 	if badResponse.Code != http.StatusBadRequest {
 		t.Fatalf("expected strict JSON rejection, got %d", badResponse.Code)
+	}
+}
+
+func TestDeadLetterAPIRejectsInvalidPagination(t *testing.T) {
+	tests := []string{
+		"?unknown=value",
+		"?limit=1&limit=2",
+		"?limit=0",
+		"?limit=101",
+		"?cursor=not-base64!",
+		"?cursor=MA",
+	}
+	api := testDeadLetterAPI(t, &deadLetterRepositoryStub{}, operatorAuthenticatorStub{actor: testOperatorActor()})
+	mux := http.NewServeMux()
+	api.register(mux)
+	for _, query := range tests {
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+			"/v1/operations/dead-letters"+query, http.NoBody)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("query %q: expected status %d, got %d", query, http.StatusBadRequest, response.Code)
+		}
+	}
+}
+
+func TestDeadLetterAPIEnforcesDocumentedErrorSemantics(t *testing.T) {
+	tests := []struct {
+		name       string
+		repository *deadLetterRepositoryStub
+		actor      authctx.AuthContext
+		method     string
+		path       string
+		body       string
+		status     int
+	}{
+		{
+			name: "missing read scope", repository: &deadLetterRepositoryStub{}, actor: testOperatorActor(),
+			method: http.MethodGet, path: "/v1/operations/dead-letters", status: http.StatusForbidden,
+		},
+		{
+			name: "missing event", repository: &deadLetterRepositoryStub{getErr: deadletter.ErrNotFound},
+			actor: testOperatorActor(), method: http.MethodGet, path: "/v1/operations/dead-letters/evt-missing",
+			status: http.StatusNotFound,
+		},
+		{
+			name: "idempotency conflict", repository: &deadLetterRepositoryStub{replayErr: deadletter.ErrReplayConflict},
+			actor: testOperatorActor(), method: http.MethodPost, path: "/v1/operations/dead-letters/evt-1/replay",
+			body: `{"reason":"repaired"}`, status: http.StatusConflict,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "missing read scope" {
+				test.actor.AllowedScopes = []string{deadletter.ReplayScope}
+			}
+			api := testDeadLetterAPI(t, test.repository, operatorAuthenticatorStub{actor: test.actor})
+			mux := http.NewServeMux()
+			api.register(mux)
+			request := httptest.NewRequestWithContext(context.Background(), test.method, test.path,
+				strings.NewReader(test.body))
+			if test.method == http.MethodPost {
+				request.Header.Set("Idempotency-Key", "request-1")
+			}
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("expected status %d, got %d: %s", test.status, response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDeadLetterAPIRejectsMalformedReplayDocuments(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		key  string
+	}{
+		{name: "missing reason", body: `{}`, key: "request-1"},
+		{name: "unknown field", body: `{"reason":"valid","unknown":true}`, key: "request-1"},
+		{name: "trailing document", body: `{"reason":"valid"}{}`, key: "request-1"},
+		{name: "missing idempotency key", body: `{"reason":"valid"}`},
+		{name: "oversized body", body: `{"reason":"` + strings.Repeat("x", maximumOperatorBodySize) + `"}`, key: "request-1"},
+	}
+	api := testDeadLetterAPI(t, &deadLetterRepositoryStub{}, operatorAuthenticatorStub{actor: testOperatorActor()})
+	mux := http.NewServeMux()
+	api.register(mux)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+				"/v1/operations/dead-letters/evt-1/replay", strings.NewReader(test.body))
+			request.Header.Set("Idempotency-Key", test.key)
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
