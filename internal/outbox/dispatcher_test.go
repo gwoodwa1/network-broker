@@ -53,12 +53,18 @@ func TestDispatcherPublishesAndAcknowledgesBatch(t *testing.T) {
 		{Event: validEvent("event-2"), Sequence: 2, Attempts: 1},
 	}}
 	publisher := &dispatcherPublisher{}
-	count, err := testDispatcher(store, publisher).RunOnce(context.Background())
+	dispatcher := testDispatcher(store, publisher)
+	dispatcher.Metrics = &Metrics{}
+	count, err := dispatcher.RunOnce(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count != 2 || len(store.published) != 2 || len(publisher.seen) != 2 {
 		t.Fatalf("unexpected dispatch result: count=%d published=%v seen=%v", count, store.published, publisher.seen)
+	}
+	metrics := dispatcher.Metrics.Snapshot()
+	if metrics.Claimed != 2 || metrics.Published != 2 || metrics.Failures != 0 {
+		t.Fatalf("unexpected metrics: %+v", metrics)
 	}
 }
 
@@ -69,7 +75,9 @@ func TestDispatcherRetriesThenDeadLettersFailures(t *testing.T) {
 		{Event: validEvent("dead"), Sequence: 2, Attempts: 3},
 	}}
 	publisher := &dispatcherPublisher{fail: map[string]error{"retry": failure, "dead": failure}}
-	count, err := testDispatcher(store, publisher).RunOnce(context.Background())
+	dispatcher := testDispatcher(store, publisher)
+	dispatcher.Metrics = &Metrics{}
+	count, err := dispatcher.RunOnce(context.Background())
 	if count != 2 || err == nil {
 		t.Fatalf("expected two attempted events and an error, got count=%d error=%v", count, err)
 	}
@@ -78,6 +86,10 @@ func TestDispatcherRetriesThenDeadLettersFailures(t *testing.T) {
 	}
 	if len(store.deadLettered) != 1 || store.deadLettered[0] != 2 {
 		t.Fatalf("expected second event to dead-letter, got %v", store.deadLettered)
+	}
+	metrics := dispatcher.Metrics.Snapshot()
+	if metrics.Claimed != 2 || metrics.Retried != 1 || metrics.DeadLettered != 1 || metrics.Failures != 2 {
+		t.Fatalf("unexpected metrics: %+v", metrics)
 	}
 }
 

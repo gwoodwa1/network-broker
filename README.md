@@ -73,6 +73,8 @@ migrations/        PostgreSQL schema and rollback migrations
 ## Requirements
 
 - Go 1.25 or newer
+- PostgreSQL 17 for durable workflow operation
+- NATS JetStream 2.14 for durable event publication
 
 ## Run the tests
 
@@ -140,20 +142,22 @@ The resolution workflow now has two repository adapters:
 
 PostgreSQL deployments must apply the versioned scripts in `migrations/` before constructing the repository with an application-owned `*sql.DB`. Reusing an idempotency key with the same actor, tenant, and request digest returns the existing workflow; reusing it for different request content fails closed.
 
-The control-plane entrypoint now requires `DATABASE_URL`, verifies connectivity before becoming available, and exposes `GET /livez` and `GET /readyz` for orchestration probes. Set `APPLY_MIGRATIONS=true` only for an instance authorised to apply the embedded, checksum-verified migrations; concurrent migration attempts are serialised with a PostgreSQL advisory lock. `LISTEN_ADDRESS` defaults to `:8080`.
+The control-plane entrypoint requires `DATABASE_URL`, `NATS_URL`, and a deployment-unique `OUTBOX_WORKER_ID`. It verifies PostgreSQL and NATS connectivity before becoming ready and exposes `GET /livez`, `GET /readyz`, and Prometheus-format `GET /metrics` endpoints. Set `APPLY_MIGRATIONS=true` only for an instance authorised to apply the embedded, checksum-verified migrations; concurrent migration attempts are serialised with a PostgreSQL advisory lock. `LISTEN_ADDRESS` defaults to `:8080`.
 
-Outbox dispatchers use ordered `FOR UPDATE SKIP LOCKED` claims, expiring worker leases, bounded retry scheduling, and terminal dead-letter state. Publishers must deduplicate on the immutable event ID because delivery is intentionally at least once.
+The NATS stream is provisioned separately from the application and must cover the configured subject. `NATS_STREAM` defaults to `BROKER_EVENTS` and `NATS_SUBJECT` to `network-broker.events`. Production authentication can use `NATS_CREDENTIALS_FILE`; TLS trust and mutual TLS identity can be configured with `NATS_CA_FILE`, `NATS_CERT_FILE`, and `NATS_KEY_FILE`.
+
+Outbox dispatchers use ordered `FOR UPDATE SKIP LOCKED` claims, expiring worker leases, bounded exponential retry scheduling, and terminal dead-letter state. The JetStream publisher waits for a persistence acknowledgement, asserts the expected stream, and supplies the immutable event ID for server-side deduplication. Consumers must still be idempotent because delivery remains intentionally at least once outside JetStream's configured duplicate window.
 
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
-- A production event-broker publisher, dead-letter operations workflow, and durable object storage.
+- A dead-letter operations workflow and durable object storage.
 - Generated protobuf API contracts and network-facing services.
 - Production gNMI, NETCONF, or SSH transport implementations.
 - External policy bundles and approval persistence.
 - Key management, workload identity, and credential-broker integration.
-- Metrics, tracing, audit-ledger export, resilience testing, and rollout controls.
+- Tracing, audit-ledger export, resilience testing, dashboards, alerts, and rollout controls.
 
 The in-memory implementations are deliberately narrow and map the expected compare-and-set and immutability semantics for later durable adapters.
 

@@ -93,6 +93,7 @@ jobs:
           --health-retries 10
     env:
       POSTGRES_TEST_DSN: postgres://broker:broker@localhost:5432/broker?sslmode=disable
+      NATS_TEST_URL: nats://localhost:4222
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -103,7 +104,19 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Run PostgreSQL integration tests
+      - name: Start NATS JetStream
+        run: |
+          docker run --detach --name nats-jetstream --publish 4222:4222 nats:2.14.2-alpine --jetstream
+          for attempt in {1..30}; do
+            if (echo > /dev/tcp/127.0.0.1/4222) 2>/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs nats-jetstream
+          exit 1
+
+      - name: Run PostgreSQL and JetStream integration tests
         run: go test -race -count=1 -tags=integration ./test/integration
 
   security:

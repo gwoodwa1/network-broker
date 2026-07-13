@@ -17,6 +17,7 @@ type Dispatcher struct {
 	Lease       time.Duration
 	RetryDelay  func(int) time.Duration
 	Now         func() time.Time
+	Metrics     *Metrics
 }
 
 // RunOnce processes at most one claimed batch. A publication failure is
@@ -28,28 +29,40 @@ func (d Dispatcher) RunOnce(ctx context.Context) (int, error) {
 	now := d.Now().UTC()
 	records, err := d.Store.Claim(ctx, d.WorkerID, d.BatchSize, now, d.Lease)
 	if err != nil {
+		d.Metrics.recordFailure()
 		return 0, err
 	}
+	d.Metrics.recordClaimed(len(records))
 
 	var failures error
 	for _, record := range records {
 		if err := d.Publisher.Publish(ctx, record.Clone()); err != nil {
+			d.Metrics.recordFailure()
 			failures = errors.Join(failures, fmt.Errorf("publish outbox event %q: %w", record.ID, err))
 			if record.Attempts >= d.MaxAttempts {
 				if markErr := d.Store.DeadLetter(ctx, record.Sequence, d.WorkerID, d.Now().UTC(), err.Error()); markErr != nil {
+					d.Metrics.recordFailure()
 					failures = errors.Join(failures, markErr)
+				} else {
+					d.Metrics.recordDeadLettered()
 				}
 				continue
 			}
 			failedAt := d.Now().UTC()
 			retryAt := failedAt.Add(d.RetryDelay(record.Attempts))
 			if retryErr := d.Store.Retry(ctx, record.Sequence, d.WorkerID, failedAt, retryAt, err.Error()); retryErr != nil {
+				d.Metrics.recordFailure()
 				failures = errors.Join(failures, retryErr)
+			} else {
+				d.Metrics.recordRetried()
 			}
 			continue
 		}
 		if err := d.Store.MarkPublished(ctx, record.Sequence, d.WorkerID, d.Now().UTC()); err != nil {
+			d.Metrics.recordFailure()
 			failures = errors.Join(failures, err)
+		} else {
+			d.Metrics.recordPublished()
 		}
 	}
 
