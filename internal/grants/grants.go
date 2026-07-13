@@ -2,6 +2,7 @@
 package grants
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -10,7 +11,11 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"network_broker/internal/keyprovider"
 )
+
+const executionGrantSigningPurpose = "execution-grant"
 
 var (
 	ErrInvalidSignature = errors.New("execution grant signature is invalid")
@@ -49,6 +54,8 @@ type ExecutionGrant struct {
 	CredentialClass      string
 	SingleUse            bool
 	Issuer               string
+	SignatureAlgorithm   string
+	SigningKeyRef        string
 	Signature            []byte
 }
 
@@ -87,8 +94,7 @@ type FenceReader interface {
 type Authority struct {
 	issuer   string
 	audience string
-	private  ed25519.PrivateKey
-	public   ed25519.PublicKey
+	signing  keyprovider.SigningProvider
 	fences   FenceReader
 
 	mu       sync.Mutex
@@ -99,19 +105,46 @@ func NewAuthority(issuer, audience string, private ed25519.PrivateKey, fences Fe
 	if issuer == "" || audience == "" || len(private) != ed25519.PrivateKeySize || fences == nil {
 		return nil, fmt.Errorf("issuer, audience, private key and fence reader are required")
 	}
-	public, ok := private.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("derive ed25519 public key")
+	keyring, err := keyprovider.NewEd25519Keyring("local-grant-signing-key", private)
+	if err != nil {
+		return nil, fmt.Errorf("create local grant signing provider: %w", err)
 	}
-	return &Authority{issuer: issuer, audience: audience, private: private, public: public, fences: fences, consumed: make(map[string]struct{})}, nil
+
+	return NewAuthorityWithProvider(issuer, audience, keyring, fences)
+}
+
+// NewAuthorityWithProvider creates an authority whose signing keys remain
+// behind an opaque provider boundary suitable for a KMS or HSM adapter.
+func NewAuthorityWithProvider(issuer, audience string, signing keyprovider.SigningProvider,
+	fences FenceReader,
+) (*Authority, error) {
+	if issuer == "" || audience == "" || signing == nil || fences == nil {
+		return nil, fmt.Errorf("issuer, audience, signing provider and fence reader are required")
+	}
+
+	return &Authority{
+		issuer: issuer, audience: audience, signing: signing, fences: fences,
+		consumed: make(map[string]struct{}),
+	}, nil
 }
 
 // Issue validates and signs a grant. Server-owned issuer and audience values
 // replace any caller-provided values.
 func (a *Authority) Issue(grant ExecutionGrant) (ExecutionGrant, error) {
+	return a.IssueContext(context.Background(), grant)
+}
+
+// IssueContext validates and signs a grant using the provider's current key.
+func (a *Authority) IssueContext(ctx context.Context, grant ExecutionGrant) (ExecutionGrant, error) {
 	grant.Issuer = a.issuer
 	grant.Audience = a.audience
 	grant.Signature = nil
+	signingKey, err := a.signing.CurrentSigningKey(ctx, executionGrantSigningPurpose)
+	if err != nil {
+		return ExecutionGrant{}, fmt.Errorf("resolve execution grant signing key: %w", err)
+	}
+	grant.SignatureAlgorithm = signingKey.Algorithm
+	grant.SigningKeyRef = signingKey.Reference
 	if err := validateGrant(grant); err != nil {
 		return ExecutionGrant{}, err
 	}
@@ -119,17 +152,29 @@ func (a *Authority) Issue(grant ExecutionGrant) (ExecutionGrant, error) {
 	if err != nil {
 		return ExecutionGrant{}, err
 	}
-	grant.Signature = ed25519.Sign(a.private, payload)
+	grant.Signature, err = a.signing.Sign(ctx, grant.SigningKeyRef, payload)
+	if err != nil {
+		return ExecutionGrant{}, fmt.Errorf("sign execution grant: %w", err)
+	}
+
 	return grant, nil
 }
 
 // Exchange verifies all bindings and consumes a single-use grant atomically.
 func (a *Authority) Exchange(grant ExecutionGrant, request ExchangeRequest) (SessionCredential, error) {
+	return a.ExchangeContext(context.Background(), grant, request)
+}
+
+// ExchangeContext verifies all bindings and consumes a single-use grant
+// atomically. Verification uses the key reference embedded in the signed grant.
+func (a *Authority) ExchangeContext(ctx context.Context, grant ExecutionGrant,
+	request ExchangeRequest,
+) (SessionCredential, error) {
 	if request.Now.IsZero() {
 		return SessionCredential{}, fmt.Errorf("exchange time is required")
 	}
 	payload, err := signingPayload(grant)
-	if err != nil || !ed25519.Verify(a.public, payload, grant.Signature) {
+	if err != nil || a.signing.Verify(ctx, grant.SigningKeyRef, grant.SignatureAlgorithm, payload, grant.Signature) != nil {
 		return SessionCredential{}, ErrInvalidSignature
 	}
 	if grant.Issuer != a.issuer || grant.Audience != a.audience || request.Now.Before(grant.NotBefore) || !request.Now.Before(grant.ExpiresAt) {
@@ -172,7 +217,7 @@ func (a *Authority) Exchange(grant ExecutionGrant, request ExchangeRequest) (Ses
 func validateGrant(grant ExecutionGrant) error {
 	if grant.GrantID == "" || grant.Nonce == "" || grant.TenantID == "" || grant.CollectorSPIFFEID == "" ||
 		grant.TaskID == "" || grant.TargetID == "" || grant.RecipeID == "" || grant.RecipeVersion == "" ||
-		grant.Issuer == "" || grant.Audience == "" {
+		grant.Issuer == "" || grant.Audience == "" || grant.SignatureAlgorithm == "" || grant.SigningKeyRef == "" {
 		return fmt.Errorf("grant identity and binding fields are required")
 	}
 	if grant.FencingToken <= 0 || grant.MaximumDuration <= 0 || grant.MaximumResponseBytes <= 0 {

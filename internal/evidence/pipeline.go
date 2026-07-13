@@ -10,6 +10,7 @@ import (
 
 	"network_broker/internal/artefacts"
 	"network_broker/internal/collector"
+	"network_broker/internal/keyprovider"
 	"network_broker/internal/parsing"
 	"network_broker/internal/sanitise"
 	"network_broker/internal/transport"
@@ -24,7 +25,7 @@ type PipelineSink struct {
 	Parser            parsing.InterfaceStateParser
 	Assembler         *Assembler
 	TransportName     string
-	EncryptionKeyRef  string
+	EncryptionKeys    keyprovider.EncryptionProvider
 	CollectorVersion  string
 	NormaliserVersion string
 	Validity          time.Duration
@@ -38,7 +39,21 @@ func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
 	assembler *Assembler, transportName, encryptionKeyRef, collectorVersion, normaliserVersion string,
 	validity time.Duration, now func() time.Time,
 ) (*PipelineSink, error) {
-	if store == nil || assembler == nil || transportName == "" || encryptionKeyRef == "" || collectorVersion == "" ||
+	if encryptionKeyRef == "" {
+		return nil, fmt.Errorf("pipeline encryption key reference is required")
+	}
+
+	return NewPipelineSinkWithKeyProvider(store, sanitiser, parser, assembler, transportName,
+		keyprovider.StaticEncryptionProvider{Reference: encryptionKeyRef}, collectorVersion,
+		normaliserVersion, validity, now)
+}
+
+func NewPipelineSinkWithKeyProvider(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
+	parser parsing.InterfaceStateParser, assembler *Assembler, transportName string,
+	encryptionKeys keyprovider.EncryptionProvider, collectorVersion, normaliserVersion string,
+	validity time.Duration, now func() time.Time,
+) (*PipelineSink, error) {
+	if store == nil || assembler == nil || transportName == "" || encryptionKeys == nil || collectorVersion == "" ||
 		normaliserVersion == "" || validity <= 0 {
 		return nil, fmt.Errorf("pipeline stores, identities, versions and positive validity are required")
 	}
@@ -47,7 +62,7 @@ func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
 	}
 	return &PipelineSink{
 		Artefacts: store, Sanitiser: sanitiser, Parser: parser, Assembler: assembler,
-		TransportName: transportName, EncryptionKeyRef: encryptionKeyRef, CollectorVersion: collectorVersion,
+		TransportName: transportName, EncryptionKeys: encryptionKeys, CollectorVersion: collectorVersion,
 		NormaliserVersion: normaliserVersion, Validity: validity, Now: now, envelopes: make(map[string]EvidenceEnvelope),
 	}, nil
 }
@@ -61,8 +76,12 @@ func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, l
 	}
 	now := s.Now().UTC()
 	attemptID = fmt.Sprintf("attempt-%s-%d", task.ID, lease.FencingToken)
+	encryptionKeyRef, err := s.EncryptionKeys.CurrentEncryptionKey(ctx, task.TenantID, "captured-artefact")
+	if err != nil {
+		return "", "", fmt.Errorf("resolve captured artefact encryption key: %w", err)
+	}
 	capturedRef, err := s.Artefacts.PutCapturedForTenant(ctx, task.TenantID, captured.Payload, "application/json",
-		s.TransportName, attemptID, s.EncryptionKeyRef, captured.CapturedAt)
+		s.TransportName, attemptID, encryptionKeyRef, captured.CapturedAt)
 	if err != nil {
 		return "", "", err
 	}
@@ -79,7 +98,7 @@ func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, l
 	if err != nil {
 		return "", "", err
 	}
-	envelope, err := s.Assembler.Assemble(AssemblyInput{
+	envelope, err := s.Assembler.AssembleContext(ctx, AssemblyInput{
 		TenantID: task.TenantID, ClaimFingerprint: task.ClaimFingerprint, TaskID: task.ID,
 		TargetSnapshotID: task.TargetSnapshotID, TargetID: task.TargetID, RecipeID: task.RecipeID,
 		RecipeVersion: task.RecipeVersion, TriggerDecisionID: task.TriggerDecisionID,

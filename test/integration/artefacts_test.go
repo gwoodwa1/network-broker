@@ -109,4 +109,74 @@ func TestPostgresArtefactMetadataAndDurableStore(t *testing.T) {
 		`UPDATE broker_artefacts SET media_type = 'tampered' WHERE artefact_id = $1`, metadata.ArtefactID); err == nil {
 		t.Fatal("expected immutable artefact trigger to reject mutation")
 	}
+	lifecycleService, err := artefacts.NewLifecycleService(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capturedMetadata, err := repository.Get(ctx, "artefact-tenant", captured.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle, err := lifecycleService.Get(ctx, "artefact-tenant", capturedMetadata.ArtefactID)
+	if err != nil || lifecycle.State != artefacts.LifecycleActive || lifecycle.Version != 1 {
+		t.Fatalf("unexpected initial lifecycle: %+v error=%v", lifecycle, err)
+	}
+	held, err := lifecycleService.Apply(ctx, artefacts.LifecycleCommand{
+		TenantID: "artefact-tenant", ArtefactID: capturedMetadata.ArtefactID, ExpectedVersion: lifecycle.Version,
+		Action: artefacts.LifecyclePlaceHold, ActorID: "operator-a", Reason: "incident preservation",
+	})
+	if err != nil || !held.LegalHold || held.Version != 2 {
+		t.Fatalf("unexpected legal hold: %+v error=%v", held, err)
+	}
+	if _, err := lifecycleService.Apply(ctx, artefacts.LifecycleCommand{
+		TenantID: "artefact-tenant", ArtefactID: capturedMetadata.ArtefactID, ExpectedVersion: held.Version,
+		Action: artefacts.LifecycleRequestDeletion, ActorID: "operator-a", Reason: "retention expired",
+	}); !errors.Is(err, artefacts.ErrLifecycleBlocked) {
+		t.Fatalf("expected legal hold to block deletion, got %v", err)
+	}
+	released, err := lifecycleService.Apply(ctx, artefacts.LifecycleCommand{
+		TenantID: "artefact-tenant", ArtefactID: capturedMetadata.ArtefactID, ExpectedVersion: held.Version,
+		Action: artefacts.LifecycleReleaseHold, ActorID: "operator-b", Reason: "hold released",
+	})
+	if err != nil || released.LegalHold || released.Version != 3 {
+		t.Fatalf("unexpected hold release: %+v error=%v", released, err)
+	}
+	if _, err := lifecycleService.Apply(ctx, artefacts.LifecycleCommand{
+		TenantID: "artefact-tenant", ArtefactID: capturedMetadata.ArtefactID, ExpectedVersion: 1,
+		Action: artefacts.LifecycleRequestDeletion, ActorID: "operator-b", Reason: "stale request",
+	}); !errors.Is(err, artefacts.ErrLifecycleConflict) {
+		t.Fatalf("expected stale lifecycle version to conflict, got %v", err)
+	}
+	pending, err := lifecycleService.Apply(ctx, artefacts.LifecycleCommand{
+		TenantID: "artefact-tenant", ArtefactID: capturedMetadata.ArtefactID, ExpectedVersion: released.Version,
+		Action: artefacts.LifecycleRequestDeletion, ActorID: "operator-b", Reason: "retention complete",
+	})
+	if err != nil || pending.State != artefacts.LifecyclePendingDeletion {
+		t.Fatalf("unexpected pending deletion: %+v error=%v", pending, err)
+	}
+	deleted, err := lifecycleService.Apply(ctx, artefacts.LifecycleCommand{
+		TenantID: "artefact-tenant", ArtefactID: capturedMetadata.ArtefactID, ExpectedVersion: pending.Version,
+		Action: artefacts.LifecycleConfirmDeletion, ActorID: "reconciler-a", Reason: "object removal confirmed",
+	})
+	if err != nil || deleted.State != artefacts.LifecycleDeleted {
+		t.Fatalf("unexpected deleted lifecycle: %+v error=%v", deleted, err)
+	}
+	if _, err := lifecycleService.Get(ctx, "other-tenant", capturedMetadata.ArtefactID); !errors.Is(err, artefacts.ErrArtefactNotFound) {
+		t.Fatalf("expected lifecycle tenant isolation, got %v", err)
+	}
+	var eventCount int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM broker_artefact_lifecycle_events
+		WHERE tenant_id = $1 AND artefact_id = $2`, "artefact-tenant", capturedMetadata.ArtefactID,
+	).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 5 {
+		t.Fatalf("expected five immutable lifecycle events, got %d", eventCount)
+	}
+	if _, err := database.ExecContext(ctx, `
+		UPDATE broker_artefact_lifecycle_events SET reason = 'tampered'
+		WHERE tenant_id = $1 AND artefact_id = $2`, "artefact-tenant", capturedMetadata.ArtefactID); err == nil {
+		t.Fatal("expected append-only lifecycle event trigger to reject mutation")
+	}
 }

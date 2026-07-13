@@ -37,7 +37,7 @@ Writes are limited to 16 MiB and follow this sequence:
 
 S3-compatible providers must support conditional `PutObject`. Configure the SDK client with TLS verification, bounded retries, workload credentials and a private endpoint. `S3BlobOptions.SSEKMSKeyID` can request SSE-KMS; otherwise the deployment must enforce encryption through bucket policy and default bucket encryption. Public buckets and ACL-based access are not supported deployment patterns.
 
-Object upload and PostgreSQL insertion cannot share one atomic transaction. A failed metadata insertion can therefore leave an unreachable content-addressed object. Lifecycle reconciliation should remove objects that have no metadata reference after a conservative safety interval; it must never overwrite or mutate a referenced object.
+Object upload and PostgreSQL insertion cannot share one atomic transaction. A failed metadata insertion can therefore leave an unreachable content-addressed object. An idempotent retry repairs the metadata without rewriting a matching object. Lifecycle reconciliation should remove objects that have no metadata reference after a conservative safety interval; it must never overwrite or mutate a referenced object.
 
 ## Read semantics
 
@@ -45,8 +45,23 @@ Retrieval first loads metadata using both tenant and artefact URI. Cross-tenant 
 
 Captured-to-sanitised lineage is enforced in both application code and the database. A sanitised record must reference a captured record belonging to the same tenant and must carry a manifest whose original and output sizes match the parent and derivative objects.
 
-## Immutability and operations
+## Key-provider boundaries
 
-Migration `000004_artefact_metadata` rejects `UPDATE` and `DELETE` for artefact metadata. Retention, legal hold and deletion workflows should therefore be represented by separate lifecycle records in a later migration rather than mutating evidence history.
+Evidence and execution-grant signing use an opaque `keyprovider.SigningProvider`. Signed records contain the provider key reference and algorithm, and verification resolves that exact historical reference after rotation. Captured artefact assembly obtains a tenant-specific opaque encryption reference from `keyprovider.EncryptionProvider`; raw encryption key material is never returned to the pipeline or persisted in metadata.
+
+`Ed25519Keyring` and `EncryptionKeyring` are deterministic reference implementations for local use and tests. Production deployments must supply KMS or HSM adapters, enforce tenant and purpose authorization in those adapters, retain verification keys for the evidence retention period, and monitor provider errors and rotation drift.
+
+## Lifecycle and operations
+
+Migration `000004_artefact_metadata` rejects `UPDATE` and `DELETE` for artefact metadata. Migration `000005_artefact_lifecycle` adds a separate current-state record and append-only event ledger without mutating evidence history. Every newly committed artefact starts in `active` state at version 1.
+
+Lifecycle commands require tenant and artefact identity, the expected version, an actor and a bounded reason. The repository locks the tenant-scoped record and applies the state change, compare-and-set version increment and audit event in one PostgreSQL transaction. Supported actions are:
+
+- `retain`: extend an active artefact's future retention deadline; deadlines cannot be shortened.
+- `place_hold` and `release_hold`: toggle a legal hold with an audited reason.
+- `request_deletion`: move an active artefact to `pending_deletion`; active retention and legal holds block the request.
+- `confirm_deletion`: move `pending_deletion` to `deleted` after the external object-deletion worker has removed the bytes.
+
+The `deleted` state is a tombstone: immutable metadata and lifecycle events remain. A deletion worker must re-read lifecycle state immediately before deleting an object, use idempotent object deletion, and confirm deletion with the latest version. A reconciler should alert on prolonged `pending_deletion` records, missing objects, unreachable objects and mismatches between current state and the event ledger.
 
 Operational monitoring should alert on conditional-write conflicts, integrity failures, orphan reconciliation, storage latency, KMS failures and lifecycle-policy drift. Object keys, payloads and transformation contents must not be used as metric labels or written to ordinary logs.

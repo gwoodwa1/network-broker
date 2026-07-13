@@ -9,6 +9,7 @@ import (
 
 	"network_broker/internal/artefacts"
 	"network_broker/internal/collector"
+	"network_broker/internal/keyprovider"
 	"network_broker/internal/parsing"
 	"network_broker/internal/sanitise"
 	"network_broker/internal/transport"
@@ -48,8 +49,14 @@ func TestPipelineSinkBuildsSignedEnvelopeFromCurrentAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink, err := NewPipelineSink(artefacts.NewStore(), sanitise.Pipeline{ID: "safe-json", Version: "v1", MaximumBytes: 4096},
-		parsing.InterfaceStateParser{ID: "interface-state", Version: "v1"}, assembler, "gnmi", "key-1", "v1", "v1", 5*time.Minute,
+	encryptionKeys := keyprovider.NewEncryptionKeyring()
+	if err := encryptionKeys.Rotate("tenant-1", "kms://evidence/tenant-1/v1"); err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewPipelineSinkWithKeyProvider(artefacts.NewStore(),
+		sanitise.Pipeline{ID: "safe-json", Version: "v1", MaximumBytes: 4096},
+		parsing.InterfaceStateParser{ID: "interface-state", Version: "v1"}, assembler, "gnmi",
+		encryptionKeys, "v1", "v1", 5*time.Minute,
 		func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +72,8 @@ func TestPipelineSinkBuildsSignedEnvelopeFromCurrentAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if envelope.AcceptedAttemptID != attemptID || envelope.InterfaceState.OperationalState != "up" {
+	if envelope.AcceptedAttemptID != attemptID || envelope.InterfaceState.OperationalState != "up" ||
+		envelope.Captured.EncryptionKeyRef != "kms://evidence/tenant-1/v1" {
 		t.Fatalf("unexpected envelope: %+v", envelope)
 	}
 	if err := assembler.Verify(envelope); err != nil {

@@ -1,12 +1,14 @@
 package evidence
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"testing"
 	"time"
 
 	"network_broker/internal/artefacts"
+	"network_broker/internal/keyprovider"
 	"network_broker/internal/parsing"
 )
 
@@ -43,6 +45,49 @@ func TestAssemblerRejectsStaleAttemptAndBrokenLineage(t *testing.T) {
 	input.Sanitised.ParentCapturedDigest = "different"
 	if _, err := assembler.Assemble(input); err == nil {
 		t.Fatal("expected broken artefact lineage to be rejected")
+	}
+}
+
+func TestAssemblerVerifiesEvidenceAcrossSigningKeyRotation(t *testing.T) {
+	_, firstPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring, err := keyprovider.NewEd25519Keyring("evidence-signing-v1", firstPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembler, err := NewAssemblerWithProvider("v1", keyring, attemptVerifier{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := assembler.AssembleContext(context.Background(), validInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secondPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Rotate("evidence-signing-v2", secondPrivate); err != nil {
+		t.Fatal(err)
+	}
+	secondInput := validInput()
+	secondInput.AcceptedAttemptID = "attempt-2"
+	second, err := assembler.AssembleContext(context.Background(), secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Attribution.SigningKeyRef != "evidence-signing-v1" ||
+		second.Attribution.SigningKeyRef != "evidence-signing-v2" {
+		t.Fatalf("signing key references do not show rotation: first=%q second=%q",
+			first.Attribution.SigningKeyRef, second.Attribution.SigningKeyRef)
+	}
+	if err := assembler.Verify(first); err != nil {
+		t.Fatalf("old evidence did not verify after rotation: %v", err)
+	}
+	if err := assembler.Verify(second); err != nil {
+		t.Fatalf("new evidence did not verify: %v", err)
 	}
 }
 

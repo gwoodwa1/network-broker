@@ -1,0 +1,5 @@
+DROP TRIGGER IF EXISTS broker_artefact_lifecycle_events_append_only ON broker_artefact_lifecycle_events;
+DROP FUNCTION IF EXISTS broker_reject_artefact_lifecycle_event_mutation();
+DROP INDEX IF EXISTS broker_artefact_lifecycle_reconciliation_idx;
+DROP TABLE IF EXISTS broker_artefact_lifecycle_events;
+DROP TABLE IF EXISTS broker_artefact_lifecycle;

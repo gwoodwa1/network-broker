@@ -11,10 +11,15 @@ import (
 )
 
 type metadataStub struct {
-	values map[string]Metadata
+	values         map[string]Metadata
+	createFailures int
 }
 
 func (s *metadataStub) Create(_ context.Context, metadata Metadata) error {
+	if s.createFailures > 0 {
+		s.createFailures--
+		return errors.New("metadata unavailable")
+	}
 	key := metadata.TenantID + "\x00" + metadata.URI
 	if existing, ok := s.values[key]; ok && existing.ArtefactID != metadata.ArtefactID {
 		return ErrMetadataConflict
@@ -34,10 +39,12 @@ func (s *metadataStub) Get(_ context.Context, tenantID, uri string) (Metadata, e
 }
 
 type blobStub struct {
-	values map[string][]byte
+	values   map[string][]byte
+	putCalls int
 }
 
 func (s *blobStub) PutIfAbsent(_ context.Context, key string, payload []byte, digest, _ string) error {
+	s.putCalls++
 	if existing, ok := s.values[key]; ok {
 		if digestBytes(existing) != digest {
 			return ErrIntegrityFailure
@@ -130,5 +137,33 @@ func TestDurableStoreRejectsOversizedPayload(t *testing.T) {
 		[]byte(strings.Repeat("x", MaximumArtefactBytes+1)), "text/plain", "gnmi", "attempt-1", "key-1", time.Now())
 	if err == nil {
 		t.Fatal("expected oversized payload to fail")
+	}
+}
+
+func TestDurableStoreRetryRepairsInterruptedMetadataWrite(t *testing.T) {
+	metadata := &metadataStub{values: make(map[string]Metadata), createFailures: 1}
+	blobs := &blobStub{values: make(map[string][]byte)}
+	store, err := NewDurableStore(metadata, blobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func() (CapturedRef, error) {
+		return store.PutCapturedForTenant(context.Background(), "tenant-a", []byte("captured"),
+			"text/plain", "gnmi", "attempt-interrupted", "kms-key-1",
+			time.Date(2026, 7, 13, 16, 0, 0, 0, time.UTC))
+	}
+	if _, err := write(); err == nil {
+		t.Fatal("expected interrupted metadata write to fail")
+	}
+	if len(blobs.values) != 1 || len(metadata.values) != 0 {
+		t.Fatalf("unexpected interrupted state: blobs=%d metadata=%d", len(blobs.values), len(metadata.values))
+	}
+	reference, err := write()
+	if err != nil || reference.URI == "" {
+		t.Fatalf("retry did not repair metadata: reference=%+v error=%v", reference, err)
+	}
+	if len(blobs.values) != 1 || len(metadata.values) != 1 || blobs.putCalls != 2 {
+		t.Fatalf("retry was not idempotent: blobs=%d metadata=%d puts=%d",
+			len(blobs.values), len(metadata.values), blobs.putCalls)
 	}
 }

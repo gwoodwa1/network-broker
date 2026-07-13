@@ -152,17 +152,17 @@ Dead-letter inspection and replay are available through a separately authorised 
 
 ## Durable artefact storage
 
-The evidence pipeline now accepts a tenant-aware artefact storage interface. The reference memory store remains available for deterministic local workflows, while `DurableStore` composes immutable PostgreSQL lineage metadata with an S3-compatible blob adapter. Artefact records have stable idempotent identifiers; object keys are tenant-encoded and content-addressed by SHA-256. Reads enforce the recorded byte count and recompute the digest before returning any bytes. Migration `000004_artefact_metadata` makes metadata append-only and enforces captured-to-sanitised parentage within a tenant. See the [durable artefact storage contract](docs/artefact-storage.md).
+The evidence pipeline now accepts a tenant-aware artefact storage interface. The reference memory store remains available for deterministic local workflows, while `DurableStore` composes immutable PostgreSQL lineage metadata with an S3-compatible blob adapter. Artefact records have stable idempotent identifiers; object keys are tenant-encoded and content-addressed by SHA-256. Reads enforce the recorded byte count and recompute the digest before returning any bytes. Migration `000004_artefact_metadata` makes metadata append-only and enforces captured-to-sanitised parentage within a tenant. Migration `000005_artefact_lifecycle` adds versioned retention, legal-hold and deletion state with an append-only event ledger. Evidence and execution grants use opaque signing-key references that remain verifiable across rotation, and artefact capture resolves tenant-specific opaque encryption-key references. See the [durable artefact storage contract](docs/artefact-storage.md).
 
 ## Current status
 
 This repository is a security-oriented prototype, not a production service. Important production work still includes:
 
-- Production runtime wiring for durable object storage, lifecycle enforcement, retention and deletion holds.
+- Production runtime wiring for durable object storage and a lifecycle deletion/reconciliation worker.
 - Generated protobuf API contracts and network-facing services.
 - Production gNMI, NETCONF, or SSH transport implementations.
 - External policy bundles and approval persistence.
-- Key management, workload identity, and credential-broker integration.
+- KMS/HSM key-provider adapters, workload identity, and an external credential-broker integration.
 - Tracing, audit-ledger export, resilience testing, dashboards, alerts, and rollout controls.
 
 The in-memory implementations are deliberately narrow and map the expected compare-and-set and immutability semantics for later durable adapters.

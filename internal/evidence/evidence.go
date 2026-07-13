@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"network_broker/internal/artefacts"
+	"network_broker/internal/keyprovider"
 	"network_broker/internal/parsing"
 )
 
@@ -23,6 +25,7 @@ type Attribution struct {
 	EvidenceAssemblerVersion string
 	AuditReference           string
 	SignatureAlgorithm       string
+	SigningKeyRef            string
 	Signature                []byte
 }
 
@@ -85,23 +88,37 @@ type AssemblyInput struct {
 
 type Assembler struct {
 	version  string
-	private  ed25519.PrivateKey
-	public   ed25519.PublicKey
+	signing  keyprovider.SigningProvider
 	verifier AttemptVerifier
 }
 
 func NewAssembler(version string, private ed25519.PrivateKey, verifier AttemptVerifier) (*Assembler, error) {
-	if version == "" || len(private) != ed25519.PrivateKeySize || verifier == nil {
+	if len(private) != ed25519.PrivateKeySize {
 		return nil, fmt.Errorf("assembler version, signing key and attempt verifier are required")
 	}
-	public, ok := private.Public().(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("derive assembler public key")
+	keyring, err := keyprovider.NewEd25519Keyring("local-evidence-signing-key", private)
+	if err != nil {
+		return nil, err
 	}
-	return &Assembler{version: version, private: private, public: public, verifier: verifier}, nil
+
+	return NewAssemblerWithProvider(version, keyring, verifier)
 }
 
 func (a *Assembler) Assemble(input AssemblyInput) (EvidenceEnvelope, error) {
+	return a.AssembleContext(context.Background(), input)
+}
+
+func NewAssemblerWithProvider(version string, signing keyprovider.SigningProvider,
+	verifier AttemptVerifier,
+) (*Assembler, error) {
+	if version == "" || signing == nil || verifier == nil {
+		return nil, fmt.Errorf("assembler version, signing provider and attempt verifier are required")
+	}
+
+	return &Assembler{version: version, signing: signing, verifier: verifier}, nil
+}
+
+func (a *Assembler) AssembleContext(ctx context.Context, input AssemblyInput) (EvidenceEnvelope, error) {
 	if err := validateInput(input); err != nil {
 		return EvidenceEnvelope{}, err
 	}
@@ -110,6 +127,10 @@ func (a *Assembler) Assemble(input AssemblyInput) (EvidenceEnvelope, error) {
 	}
 	if input.Sanitised.ParentCapturedDigest != input.Captured.SHA256Digest {
 		return EvidenceEnvelope{}, fmt.Errorf("sanitised artefact does not descend from captured artefact")
+	}
+	signingKey, err := a.signing.CurrentSigningKey(ctx, "evidence-envelope")
+	if err != nil {
+		return EvidenceEnvelope{}, fmt.Errorf("resolve evidence signing key: %w", err)
 	}
 	envelope := EvidenceEnvelope{
 		TenantID: input.TenantID, ClaimFingerprint: input.ClaimFingerprint, TaskID: input.TaskID,
@@ -124,7 +145,8 @@ func (a *Assembler) Assemble(input AssemblyInput) (EvidenceEnvelope, error) {
 		InterfaceState: input.Observation,
 		Attribution: Attribution{
 			CollectorIdentity: input.CollectorIdentity, CollectorVersion: input.CollectorVersion,
-			EvidenceAssemblerVersion: a.version, AuditReference: input.AuditReference, SignatureAlgorithm: "Ed25519",
+			EvidenceAssemblerVersion: a.version, AuditReference: input.AuditReference,
+			SignatureAlgorithm: signingKey.Algorithm, SigningKeyRef: signingKey.Reference,
 		},
 	}
 	unsigned, err := signingPayload(envelope)
@@ -137,16 +159,25 @@ func (a *Assembler) Assemble(input AssemblyInput) (EvidenceEnvelope, error) {
 	if err != nil {
 		return EvidenceEnvelope{}, err
 	}
-	envelope.Attribution.Signature = ed25519.Sign(a.private, unsigned)
+	envelope.Attribution.Signature, err = a.signing.Sign(ctx, signingKey.Reference, unsigned)
+	if err != nil {
+		return EvidenceEnvelope{}, fmt.Errorf("sign evidence envelope: %w", err)
+	}
+
 	return envelope, nil
 }
 
 func (a *Assembler) Verify(envelope EvidenceEnvelope) error {
+	return a.VerifyContext(context.Background(), envelope)
+}
+
+func (a *Assembler) VerifyContext(ctx context.Context, envelope EvidenceEnvelope) error {
 	payload, err := signingPayload(envelope)
 	if err != nil {
 		return err
 	}
-	if !ed25519.Verify(a.public, payload, envelope.Attribution.Signature) {
+	if err := a.signing.Verify(ctx, envelope.Attribution.SigningKeyRef,
+		envelope.Attribution.SignatureAlgorithm, payload, envelope.Attribution.Signature); err != nil {
 		return fmt.Errorf("evidence envelope signature is invalid")
 	}
 	return nil

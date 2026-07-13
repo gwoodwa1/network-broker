@@ -21,7 +21,7 @@ func NewPostgresRepository(database *sql.DB) (*PostgresRepository, error) {
 	return &PostgresRepository{database: database}, nil
 }
 
-func (r *PostgresRepository) Create(ctx context.Context, metadata Metadata) error {
+func (r *PostgresRepository) Create(ctx context.Context, metadata Metadata) (err error) {
 	if err := validateMetadata(r, metadata); err != nil {
 		return err
 	}
@@ -29,7 +29,16 @@ func (r *PostgresRepository) Create(ctx context.Context, metadata Metadata) erro
 	if err != nil {
 		return err
 	}
-	result, err := r.database.ExecContext(ctx, `
+	transaction, err := r.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("begin artefact metadata insert: %w", err)
+	}
+	defer func() {
+		if rollbackErr := transaction.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback artefact metadata insert: %w", rollbackErr))
+		}
+	}()
+	result, err := transaction.ExecContext(ctx, `
 		INSERT INTO broker_artefacts (
 			artefact_id, tenant_id, class, uri, object_key, sha256_digest, byte_count,
 			media_type, transport, attempt_id, encryption_key_ref, parent_artefact_id,
@@ -50,7 +59,28 @@ func (r *PostgresRepository) Create(ctx context.Context, metadata Metadata) erro
 		return fmt.Errorf("inspect artefact metadata insert: %w", err)
 	}
 	if rows == 1 {
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO broker_artefact_lifecycle (tenant_id, artefact_id)
+			VALUES ($1, $2)`, metadata.TenantID, metadata.ArtefactID); err != nil {
+			return fmt.Errorf("insert initial artefact lifecycle: %w", err)
+		}
+		if _, err := transaction.ExecContext(ctx, `
+			INSERT INTO broker_artefact_lifecycle_events (
+				tenant_id, artefact_id, version, action, previous_state, next_state,
+				previous_legal_hold, next_legal_hold, actor_id, reason
+			) VALUES ($1, $2, 1, 'created', NULL, 'active', NULL, FALSE,
+				'system:artefact-store', 'artefact metadata recorded')`,
+			metadata.TenantID, metadata.ArtefactID); err != nil {
+			return fmt.Errorf("append initial artefact lifecycle event: %w", err)
+		}
+		if err := transaction.Commit(); err != nil {
+			return fmt.Errorf("commit artefact metadata insert: %w", err)
+		}
+
 		return nil
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit idempotent artefact metadata insert: %w", err)
 	}
 	existing, err := r.Get(ctx, metadata.TenantID, metadata.URI)
 	if err != nil {

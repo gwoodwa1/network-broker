@@ -40,11 +40,11 @@ type ExecutionAuthorizer interface {
 }
 
 type GrantIssuer interface {
-	Issue(grants.ExecutionGrant) (grants.ExecutionGrant, error)
+	IssueContext(context.Context, grants.ExecutionGrant) (grants.ExecutionGrant, error)
 }
 
 type CredentialExchanger interface {
-	Exchange(grants.ExecutionGrant, grants.ExchangeRequest) (grants.SessionCredential, error)
+	ExchangeContext(context.Context, grants.ExecutionGrant, grants.ExchangeRequest) (grants.SessionCredential, error)
 }
 
 // Worker executes one bounded task attempt.
@@ -120,7 +120,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return err
 	}
-	grant, err := w.GrantIssuer.Issue(grants.ExecutionGrant{
+	grant, err := w.GrantIssuer.IssueContext(ctx, grants.ExecutionGrant{
 		GrantID: grantID, Nonce: nonce, TenantID: task.TenantID, CollectorSPIFFEID: w.ID,
 		ResolutionID: task.ResolutionID, TaskID: task.ID, TargetSnapshotID: task.TargetSnapshotID,
 		TargetSnapshotDigest: task.TargetSnapshotHash, TargetID: task.TargetID,
@@ -140,7 +140,7 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return err
 	}
-	credential, err := w.Credentials.Exchange(grant, grants.ExchangeRequest{
+	credential, err := w.Credentials.ExchangeContext(ctx, grant, grants.ExchangeRequest{
 		PresentingSPIFFEID: w.ID, TaskID: task.ID, TargetID: task.TargetID,
 		RecipeID: task.RecipeID, RecipeVersion: task.RecipeVersion,
 		FencingToken: lease.FencingToken, Now: now(),

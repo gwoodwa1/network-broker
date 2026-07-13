@@ -1,11 +1,14 @@
 package grants
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"network_broker/internal/keyprovider"
 )
 
 type fenceStore struct {
@@ -62,6 +65,54 @@ func TestExchangeRejectsTamperedGrantAndExpiry(t *testing.T) {
 	}
 }
 
+func TestAuthorityVerifiesGrantsIssuedBeforeSigningKeyRotation(t *testing.T) {
+	_, firstPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring, err := keyprovider.NewEd25519Keyring("grant-key-v1", firstPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 13, 10, 0, 0, 0, time.UTC)
+	fences := &fenceStore{tokens: map[string]int64{"task-1": 7, "task-2": 9}}
+	authority, err := NewAuthorityWithProvider("credential-broker", "site-a", keyring, fences)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := authority.IssueContext(context.Background(), validGrant(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secondPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keyring.Rotate("grant-key-v2", secondPrivate); err != nil {
+		t.Fatal(err)
+	}
+	secondInput := validGrant(now)
+	secondInput.GrantID = "grant-2"
+	secondInput.Nonce = "nonce-2"
+	secondInput.TaskID = "task-2"
+	secondInput.FencingToken = 9
+	second, err := authority.Issue(secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SigningKeyRef != "grant-key-v1" || second.SigningKeyRef != "grant-key-v2" {
+		t.Fatalf("unexpected signing references: first=%q second=%q", first.SigningKeyRef, second.SigningKeyRef)
+	}
+	request := ExchangeRequest{
+		PresentingSPIFFEID: first.CollectorSPIFFEID, TaskID: first.TaskID, TargetID: first.TargetID,
+		RecipeID: first.RecipeID, RecipeVersion: first.RecipeVersion,
+		FencingToken: first.FencingToken, Now: now,
+	}
+	if _, err := authority.ExchangeContext(context.Background(), first, request); err != nil {
+		t.Fatalf("grant signed before rotation no longer verifies: %v", err)
+	}
+}
+
 func fixture(t *testing.T) (*Authority, ExecutionGrant, ExchangeRequest, *fenceStore) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(nil)
@@ -74,7 +125,19 @@ func fixture(t *testing.T) (*Authority, ExecutionGrant, ExchangeRequest, *fenceS
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant, err := authority.Issue(ExecutionGrant{
+	grant, err := authority.Issue(validGrant(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ExchangeRequest{
+		PresentingSPIFFEID: grant.CollectorSPIFFEID, TaskID: grant.TaskID, TargetID: grant.TargetID,
+		RecipeID: grant.RecipeID, RecipeVersion: grant.RecipeVersion, FencingToken: grant.FencingToken, Now: now,
+	}
+	return authority, grant, request, fences
+}
+
+func validGrant(now time.Time) ExecutionGrant {
+	return ExecutionGrant{
 		GrantID: "grant-1", Nonce: "nonce-1", TenantID: "tenant-1",
 		CollectorSPIFFEID: "spiffe://example.test/collector/a", ResolutionID: "resolution-1",
 		TaskID: "task-1", TargetSnapshotID: "snapshot-1", TargetSnapshotDigest: "sha256:snapshot",
@@ -84,13 +147,5 @@ func fixture(t *testing.T) (*Authority, ExecutionGrant, ExchangeRequest, *fenceS
 		NotBefore: now.Add(-time.Minute), ExpiresAt: now.Add(time.Minute),
 		MaximumDuration: 10 * time.Second, MaximumResponseBytes: 1024,
 		CredentialClass: "network-read", SingleUse: true,
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	request := ExchangeRequest{
-		PresentingSPIFFEID: grant.CollectorSPIFFEID, TaskID: grant.TaskID, TargetID: grant.TargetID,
-		RecipeID: grant.RecipeID, RecipeVersion: grant.RecipeVersion, FencingToken: grant.FencingToken, Now: now,
-	}
-	return authority, grant, request, fences
 }
