@@ -1,0 +1,29 @@
+# Internal architecture and planning material
+/Engineering_Backlog.md
+/Execution_Plan.md
+/Governed_Network_Context_Evidence_Broker_Revision_4.md
+/Implementation_Roadmap.md
+/Implementation_Staging_Document.md
+/docs/internal/
+
+# Go build and test output
+/.gocache/
+/.gomodcache/
+/bin/
+*.test
+*.out
+coverage.*
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
