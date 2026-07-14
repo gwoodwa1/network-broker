@@ -27,6 +27,14 @@ The constructor creates no signing key and has no memory-store fallback. Before 
 
 Any insertion, version or event conflict rolls back the entire task set. Concurrent planners therefore produce one winner and one `ErrFanoutConflict`, never two independently executable task sets.
 
+## Authenticated planning invocation
+
+The control plane exposes `POST /v1/resolutions/{resolution_id}/tasks:queue` only when its TLS and client trust configuration is enabled. The peer certificate must already be verified by TLS and must carry the configured SPIFFE trust domain with the `planner` role. That role receives only the `resolutions:plan` scope.
+
+The request uses schema version `v1`, is limited to 512 KiB and 1,000 tasks, rejects unknown fields and accepts exactly one JSON document. It contains the expected resolution version and task planning outputs, but no tenant, resolution, task-state, event-id or event-time authority. `planning.Service` derives those values from the authenticated context, URL and server dependencies before invoking the transactional repository. A changed resolution version returns `RESOLUTION_AUTHORITY_CHANGED`; the losing planner cannot partially insert tasks.
+
+The planner is an authority-bearing internal workload. It must submit only catalogue-derived recipes and persisted trigger/planning decision identifiers. Database-role enforcement and direct foreign-key validation of those provenance bindings remain part of the supported deployment hardening gate.
+
 ## Reconciliation scheduling
 
 The control plane always constructs `ReconciliationRunner`. It lists a bounded, deterministic batch of expired tasks whose indexed evidence bindings still match, then invokes the guarded acceptance update. A task can be accepted only if tenant, task, fence and execution-grant authority are unchanged at update time.
@@ -44,6 +52,7 @@ Prometheus counters report candidates, reconciled envelopes, expected skips and 
 The PostgreSQL integration suite proves:
 
 - two concurrent planners create one complete task set and one outbox event;
+- the concurrent planners enter through the authenticated, tenant-binding planning service;
 - a collector assembled exclusively from durable repository boundaries completes a task and its result survives reconstruction;
 - a persisted envelope is accepted after simulated collector loss; and
 - reacquisition increments the fence and prevents stale evidence acceptance.

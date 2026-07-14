@@ -62,7 +62,8 @@ func (r *PostgresRepository) CreateFanoutContext(ctx context.Context,
 	}
 	result, err := transaction.ExecContext(ctx, `
 		UPDATE broker_resolutions
-		SET state = 'queued', target_count = $3, version = version + 1, updated_at = $4
+		SET state = 'queued', target_count = $3, version = version + 1,
+			updated_at = GREATEST($4, updated_at)
 		WHERE tenant_id = $1 AND id = $2 AND version = $5 AND state = 'planning'`,
 		request.TenantID, request.ResolutionID, len(request.Tasks),
 		normaliseTime(request.QueuedAt), request.ExpectedResolutionVersion)

@@ -20,8 +20,8 @@ import (
 	"network_broker/internal/collectorruntime"
 	"network_broker/internal/grants"
 	"network_broker/internal/keyprovider"
-	"network_broker/internal/outbox"
 	"network_broker/internal/parsing"
+	"network_broker/internal/planning"
 	"network_broker/internal/sanitise"
 	"network_broker/internal/transport"
 	"network_broker/migrations"
@@ -143,21 +143,36 @@ func TestResolutionTaskFanoutAndEventAreOneConcurrentTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := []collector.FanoutRequest{
-		fanoutRequest(resolutionID, "fanout-event-a-"+resolutionID, tasks, now),
-		fanoutRequest(resolutionID, "fanout-event-b-"+resolutionID, tasks, now),
+	firstService, err := planning.NewService(firstRepository, func() time.Time { return now },
+		func(string) (string, error) { return "fanout-event-a-" + resolutionID, nil })
+	if err != nil {
+		t.Fatal(err)
 	}
-	repositories := []*collector.PostgresRepository{firstRepository, secondRepository}
+	secondService, err := planning.NewService(secondRepository, func() time.Time { return now },
+		func(string) (string, error) { return "fanout-event-b-" + resolutionID, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	services := []*planning.Service{firstService, secondService}
+	actor := authctx.AuthContext{
+		SubjectID: "spiffe://example.test/tenant/tenant-integration/role/planner/workload/control-1",
+		TenantID:  "tenant-integration", AllowedScopes: []string{"resolutions:plan"},
+		AuthenticatedAt: now,
+	}
+	request := planning.QueueRequest{
+		ResolutionID: resolutionID, ExpectedResolutionVersion: 3, Tasks: tasks,
+	}
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	var waitGroup sync.WaitGroup
-	for index := range repositories {
+	for index := range services {
 		waitGroup.Add(1)
-		go func(repository *collector.PostgresRepository, request collector.FanoutRequest) {
+		go func(service *planning.Service) {
 			defer waitGroup.Done()
 			<-start
-			results <- repository.CreateFanoutContext(ctx, request)
-		}(repositories[index], requests[index])
+			_, queueErr := service.Queue(ctx, actor, request)
+			results <- queueErr
+		}(services[index])
 	}
 	close(start)
 	waitGroup.Wait()
@@ -391,24 +406,6 @@ func TestExpiredEvidenceReconciliationAcceptsOnlyUnchangedFence(t *testing.T) {
 	if _, err := restartedTasks.ReconcileExpiredEvidenceContext(ctx,
 		staleEnvelope.EvidenceID, staleNow.Add(7*time.Second)); !errors.Is(err, collector.ErrStaleFence) {
 		t.Fatalf("expected old evidence to fail after reacquisition, got %v", err)
-	}
-}
-
-func fanoutRequest(resolutionID, eventID string, tasks []collector.Task,
-	queuedAt time.Time,
-) collector.FanoutRequest {
-	payload := []byte(fmt.Sprintf(
-		`{"schema_version":"v1","resolution_id":%q,"task_count":%d}`,
-		resolutionID, len(tasks)))
-
-	return collector.FanoutRequest{
-		TenantID: "tenant-integration", ResolutionID: resolutionID,
-		ExpectedResolutionVersion: 3, Tasks: tasks, QueuedAt: queuedAt,
-		Event: outbox.Event{
-			ID: eventID, TenantID: "tenant-integration", AggregateType: "resolution",
-			AggregateID: resolutionID, Type: "resolution.tasks_queued",
-			Payload: payload, OccurredAt: queuedAt,
-		},
 	}
 }
 

@@ -25,7 +25,9 @@ import (
 	"network_broker/internal/deadletter"
 	"network_broker/internal/operatorauth"
 	"network_broker/internal/outbox"
+	"network_broker/internal/planning"
 	"network_broker/internal/resolution"
+	"network_broker/internal/workloadidentity"
 	"network_broker/migrations"
 )
 
@@ -73,6 +75,7 @@ type application struct {
 	nats                  *nats.Conn
 	metrics               *outbox.Metrics
 	deadLetters           *deadLetterAPI
+	planning              *planningAPI
 	reconciliation        *collector.PostgresRepository
 	reconciliationMetrics *collector.ReconciliationMetrics
 }
@@ -103,7 +106,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		return 2
 	}
 	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	database, err := openDatabase(ctx, configuration.DatabaseURL)
+	database, err := openApplicationDatabase(ctx, configuration)
 	if err != nil {
 		logger.Error("database bootstrap failed", "error", err)
 		return 1
@@ -113,12 +116,6 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 			logger.Error("database close failed", "error", closeErr)
 		}
 	}()
-	if configuration.ApplyMigrations {
-		if err := migrations.Apply(ctx, database); err != nil {
-			logger.Error("database migration failed", "error", err)
-			return 1
-		}
-	}
 	resolutionRepository, err := resolution.NewPostgresRepository(database)
 	if err != nil {
 		logger.Error("resolution repository bootstrap failed", "error", err)
@@ -149,10 +146,11 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		logger.Error("operator API bootstrap failed", "error", err)
 		return 1
 	}
-	app := &application{
-		database: database, resolutions: resolutionRepository, outbox: outboxStore,
-		nats: delivery.connection, metrics: delivery.metrics, deadLetters: deadLetterAPI,
-		reconciliation: reconciliation.repository, reconciliationMetrics: reconciliation.metrics,
+	app, err := newApplication(configuration, database, resolutionRepository, outboxStore,
+		delivery, reconciliation, deadLetterAPI, serverTLS, logger)
+	if err != nil {
+		logger.Error("planning API bootstrap failed", "error", err)
+		return 1
 	}
 	server := &http.Server{
 		Addr:              configuration.ListenAddress,
@@ -165,7 +163,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		TLSConfig:         serverTLS,
 	}
 	logger.Info("control plane starting", "listen_address", configuration.ListenAddress,
-		"operator_api_enabled", deadLetterAPI != nil)
+		"operator_api_enabled", deadLetterAPI != nil, "planning_api_enabled", app.planning != nil)
 	if err := serve(ctx, server, delivery.runner, reconciliation.runner); err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			logger.Info("control plane stopped")
@@ -177,6 +175,48 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	logger.Info("control plane stopped")
 
 	return 0
+}
+
+func newApplication(configuration config, database *sql.DB,
+	resolutionRepository *resolution.PostgresRepository, outboxStore *outbox.PostgresStore,
+	delivery *deliveryRuntime, reconciliation *reconciliationRuntime,
+	deadLetters *deadLetterAPI, serverTLS *tls.Config, logger *slog.Logger,
+) (*application, error) {
+	planningAPI, err := newPlanningRuntime(configuration, reconciliation.repository,
+		serverTLS, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return &application{
+		database: database, resolutions: resolutionRepository, outbox: outboxStore,
+		nats: delivery.connection, metrics: delivery.metrics, deadLetters: deadLetters,
+		planning:       planningAPI,
+		reconciliation: reconciliation.repository, reconciliationMetrics: reconciliation.metrics,
+	}, nil
+}
+
+func newPlanningRuntime(configuration config, repository planning.FanoutRepository,
+	serverTLS *tls.Config, logger *slog.Logger,
+) (*planningAPI, error) {
+	if serverTLS == nil {
+		return nil, nil
+	}
+	service, err := planning.NewService(repository, time.Now, randomIdentifier)
+	if err != nil {
+		return nil, err
+	}
+	authenticator := workloadidentity.Authenticator{
+		TrustDomain: configuration.OperatorSPIFFETrustDomain, Now: time.Now,
+		// #nosec G101 -- these values are authorization labels, not credentials.
+		Roles: map[string]workloadidentity.RoleBinding{
+			"planner": {
+				Scopes: []string{"resolutions:plan"}, CredentialClass: "mtls-spiffe",
+			},
+		},
+	}
+
+	return newPlanningAPI(service, authenticator, logger)
 }
 
 func newReconciliationRuntime(configuration config, database *sql.DB,
@@ -430,6 +470,24 @@ func openDatabase(ctx context.Context, databaseURL string) (*sql.DB, error) {
 	return database, nil
 }
 
+func openApplicationDatabase(ctx context.Context, configuration config) (*sql.DB, error) {
+	database, err := openDatabase(ctx, configuration.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if configuration.ApplyMigrations {
+		if err := migrations.Apply(ctx, database); err != nil {
+			if closeErr := database.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
+
+			return nil, fmt.Errorf("apply database migrations: %w", err)
+		}
+	}
+
+	return database, nil
+}
+
 func (a *application) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", func(response http.ResponseWriter, _ *http.Request) {
@@ -439,6 +497,9 @@ func (a *application) routes() http.Handler {
 	mux.HandleFunc("GET /metrics", a.metricsHandler)
 	if a != nil && a.deadLetters != nil {
 		a.deadLetters.register(mux)
+	}
+	if a != nil && a.planning != nil {
+		a.planning.register(mux)
 	}
 
 	return mux
