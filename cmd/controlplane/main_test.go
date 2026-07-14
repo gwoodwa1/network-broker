@@ -14,17 +14,20 @@ import (
 
 func TestLoadConfigRequiresDatabaseAndParsesOperationalSettings(t *testing.T) {
 	values := map[string]string{
-		"DATABASE_URL":     "postgres://localhost/broker",
-		"LISTEN_ADDRESS":   "127.0.0.1:9000",
-		"APPLY_MIGRATIONS": "true",
-		"NATS_URL":         "nats://localhost:4222",
-		"OUTBOX_WORKER_ID": "worker-a",
+		"DATABASE_URL":           "postgres://localhost/broker",
+		"DATABASE_ROLE":          "broker_controlplane",
+		"MIGRATION_DATABASE_URL": "postgres://migrator@localhost/broker",
+		"LISTEN_ADDRESS":         "127.0.0.1:9000",
+		"APPLY_MIGRATIONS":       "true",
+		"NATS_URL":               "nats://localhost:4222",
+		"OUTBOX_WORKER_ID":       "worker-a",
 	}
 	configuration, err := loadConfig(func(key string) string { return values[key] })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configuration.DatabaseURL != values["DATABASE_URL"] ||
+	if configuration.DatabaseURL != values["DATABASE_URL"] || configuration.DatabaseRole != values["DATABASE_ROLE"] ||
+		configuration.MigrationDatabaseURL != values["MIGRATION_DATABASE_URL"] ||
 		configuration.ListenAddress != values["LISTEN_ADDRESS"] || !configuration.ApplyMigrations ||
 		configuration.NATSURL != values["NATS_URL"] || configuration.OutboxWorkerID != values["OUTBOX_WORKER_ID"] ||
 		configuration.NATSStream != defaultNATSStream || configuration.NATSSubject != defaultNATSSubject ||
@@ -38,9 +41,38 @@ func TestLoadConfigRequiresDatabaseAndParsesOperationalSettings(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRequiresSeparateMigrationIdentity(t *testing.T) {
+	values := map[string]string{
+		"DATABASE_URL": "postgres://runtime@localhost/broker", "DATABASE_ROLE": "broker_controlplane",
+		"NATS_URL": "nats://localhost:4222", "OUTBOX_WORKER_ID": "worker-a", "APPLY_MIGRATIONS": "true",
+	}
+	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {
+		t.Fatal("expected a missing migration identity to fail")
+	}
+	values["MIGRATION_DATABASE_URL"] = values["DATABASE_URL"]
+	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {
+		t.Fatal("expected runtime identity reuse for migrations to fail")
+	}
+	values["MIGRATION_DATABASE_URL"] = "postgres://migrator@localhost/broker"
+	if _, err := loadConfig(func(key string) string { return values[key] }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadConfigRequiresDatabaseRole(t *testing.T) {
+	values := map[string]string{
+		"DATABASE_URL": "postgres://localhost/broker", "NATS_URL": "nats://localhost:4222",
+		"OUTBOX_WORKER_ID": "worker-a",
+	}
+	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {
+		t.Fatal("expected a missing database role to fail")
+	}
+}
+
 func TestLoadConfigValidatesReconciliationBounds(t *testing.T) {
 	values := map[string]string{
 		"DATABASE_URL": "postgres://localhost/broker", "NATS_URL": "nats://localhost:4222",
+		"DATABASE_ROLE":    "broker_controlplane",
 		"OUTBOX_WORKER_ID": "worker-a", "RECONCILIATION_BATCH_SIZE": "25",
 		"RECONCILIATION_POLL_INTERVAL": "2s", "RECONCILIATION_FAILURE_DELAY": "3s",
 	}
@@ -61,6 +93,7 @@ func TestLoadConfigValidatesReconciliationBounds(t *testing.T) {
 func TestLoadConfigRequiresCompleteNATSTLSIdentity(t *testing.T) {
 	values := map[string]string{
 		"DATABASE_URL": "postgres://localhost/broker", "NATS_URL": "tls://localhost:4222",
+		"DATABASE_ROLE":    "broker_controlplane",
 		"OUTBOX_WORKER_ID": "worker-a", "NATS_CERT_FILE": "/identity/client.pem",
 	}
 	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {
@@ -71,6 +104,7 @@ func TestLoadConfigRequiresCompleteNATSTLSIdentity(t *testing.T) {
 func TestLoadConfigRequiresCompleteOperatorMTLSConfiguration(t *testing.T) {
 	values := map[string]string{
 		"DATABASE_URL": "postgres://localhost/broker", "NATS_URL": "nats://localhost:4222",
+		"DATABASE_ROLE":    "broker_controlplane",
 		"OUTBOX_WORKER_ID": "worker-a", "SERVER_TLS_CERT_FILE": "/identity/server.pem",
 	}
 	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {

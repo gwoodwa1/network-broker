@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"network_broker/internal/collector"
+	"network_broker/internal/databaseauth"
 	"network_broker/internal/deadletter"
 	"network_broker/internal/operatorauth"
 	"network_broker/internal/outbox"
@@ -49,6 +50,8 @@ const (
 
 type config struct {
 	DatabaseURL                string
+	DatabaseRole               string
+	MigrationDatabaseURL       string
 	ListenAddress              string
 	ApplyMigrations            bool
 	NATSURL                    string
@@ -308,6 +311,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	configuration := config{
 		DatabaseURL:                getenv("DATABASE_URL"),
+		DatabaseRole:               getenv("DATABASE_ROLE"),
+		MigrationDatabaseURL:       getenv("MIGRATION_DATABASE_URL"),
 		ListenAddress:              getenv("LISTEN_ADDRESS"),
 		NATSURL:                    getenv("NATS_URL"),
 		NATSStream:                 getenv("NATS_STREAM"),
@@ -327,6 +332,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	if configuration.DatabaseURL == "" {
 		return config{}, fmt.Errorf("DATABASE_URL is required")
+	}
+	if err := databaseauth.ValidateName(configuration.DatabaseRole); err != nil {
+		return config{}, fmt.Errorf("DATABASE_ROLE is required and invalid: %w", err)
 	}
 	if configuration.ListenAddress == "" {
 		configuration.ListenAddress = defaultListenAddress
@@ -365,6 +373,15 @@ func loadConfig(getenv func(string) string) (config, error) {
 			return config{}, fmt.Errorf("APPLY_MIGRATIONS must be a boolean: %w", err)
 		}
 		configuration.ApplyMigrations = value
+	}
+	if configuration.ApplyMigrations && configuration.MigrationDatabaseURL == "" {
+		return config{}, fmt.Errorf("MIGRATION_DATABASE_URL is required when APPLY_MIGRATIONS is true")
+	}
+	if !configuration.ApplyMigrations && configuration.MigrationDatabaseURL != "" {
+		return config{}, fmt.Errorf("MIGRATION_DATABASE_URL requires APPLY_MIGRATIONS=true")
+	}
+	if configuration.ApplyMigrations && configuration.MigrationDatabaseURL == configuration.DatabaseURL {
+		return config{}, fmt.Errorf("migration and runtime database identities must be separate")
 	}
 	if err := loadReconciliationConfig(getenv, &configuration); err != nil {
 		return config{}, err
@@ -471,18 +488,32 @@ func openDatabase(ctx context.Context, databaseURL string) (*sql.DB, error) {
 }
 
 func openApplicationDatabase(ctx context.Context, configuration config) (*sql.DB, error) {
-	database, err := openDatabase(ctx, configuration.DatabaseURL)
-	if err != nil {
-		return nil, err
-	}
 	if configuration.ApplyMigrations {
-		if err := migrations.Apply(ctx, database); err != nil {
-			if closeErr := database.Close(); closeErr != nil {
+		migrationDatabase, err := openDatabase(ctx, configuration.MigrationDatabaseURL)
+		if err != nil {
+			return nil, fmt.Errorf("open migration database identity: %w", err)
+		}
+		if err := migrations.Apply(ctx, migrationDatabase); err != nil {
+			if closeErr := migrationDatabase.Close(); closeErr != nil {
 				err = errors.Join(err, closeErr)
 			}
 
 			return nil, fmt.Errorf("apply database migrations: %w", err)
 		}
+		if err := migrationDatabase.Close(); err != nil {
+			return nil, fmt.Errorf("close migration database identity: %w", err)
+		}
+	}
+	database, err := openDatabase(ctx, configuration.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := databaseauth.VerifyControlPlane(ctx, database, configuration.DatabaseRole); err != nil {
+		if closeErr := database.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+
+		return nil, fmt.Errorf("verify database authority: %w", err)
 	}
 
 	return database, nil

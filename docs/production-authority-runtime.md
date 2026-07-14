@@ -58,3 +58,15 @@ The PostgreSQL integration suite proves:
 - reacquisition increments the fence and prevents stale evidence acceptance.
 
 The remaining deployment acceptance test must repeat these cases by killing actual collector processes while using qualified external S3, KMS, workload identity, credential-broker and device-lab dependencies.
+
+## PostgreSQL identity enforcement
+
+The control-plane process requires `DATABASE_ROLE` and verifies the exact live
+`current_user` and `session_user` before constructing authority repositories.
+Administrative capabilities and `CREATE` on the `public` schema fail startup.
+The same check audits effective privileges on every broker-prefixed table and
+sequence against the exact control-plane manifest, rejecting missing grants and
+any access obtained beyond that manifest.
+Schema migration uses a separately configured `MIGRATION_DATABASE_URL`, which
+is opened only for migration and closed before the runtime connection is
+created. See [PostgreSQL runtime-role enforcement](database-role-enforcement.md).
