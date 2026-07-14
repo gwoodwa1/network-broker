@@ -44,6 +44,8 @@ Retrieval -> current actor-specific disclosure decision -> delivery receipt
 
 Collection authorization and evidence disclosure are intentionally separate. Permission to trigger work does not imply permission to retrieve everything that work produces.
 
+New to the project? Start with [Network Broker in 10 Minutes](docs/network-broker-in-10-minutes.md).
+
 ## Repository layout
 
 ```text
