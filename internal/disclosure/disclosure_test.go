@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 	"time"
 
@@ -89,6 +90,35 @@ func TestDeliverRejectsDecisionUsedByAnotherActor(t *testing.T) {
 	if _, _, err := service.Deliver(decision.DecisionID, "actor-b", "tenant-a", "evidence-1", "request-1", "normalised",
 		map[string]string{"operational_state": "up"}, nil); err == nil {
 		t.Fatal("expected cross-actor decision reuse to be rejected")
+	}
+}
+
+func TestDeliveryRequestIsIdempotentAndConflictingReuseFails(t *testing.T) {
+	service := NewService()
+	decision, err := service.Evaluate(DecisionRequest{
+		ActorID: "actor-a", TenantID: "tenant-a", EvidenceID: "evidence-1",
+		Representation: "normalised", PolicyBundleDigest: "policy-1", InputDigest: "input-1",
+		PermittedFields: []string{"interface_name", "operational_state"}, TTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliver := func(fields map[string]string) (*Receipt, error) {
+		_, receipt, deliverErr := service.Deliver(decision.DecisionID, "actor-a", "tenant-a",
+			"evidence-1", "request-idempotent", "normalised", fields, nil)
+
+		return receipt, deliverErr
+	}
+	first, err := deliver(map[string]string{"operational_state": "up"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := deliver(map[string]string{"operational_state": "up"})
+	if err != nil || second.ReceiptID != first.ReceiptID {
+		t.Fatalf("idempotent delivery created another receipt: first=%+v second=%+v error=%v", first, second, err)
+	}
+	if _, err := deliver(map[string]string{"interface_name": "Ethernet1"}); !errors.Is(err, ErrReceiptConflict) {
+		t.Fatalf("expected request reuse with another payload to fail closed, got %v", err)
 	}
 }
 

@@ -4,16 +4,21 @@ package integration_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"network_broker/internal/artefacts"
 	"network_broker/internal/collector"
+	"network_broker/internal/evidence"
+	"network_broker/internal/parsing"
 	"network_broker/migrations"
 )
 
@@ -45,12 +50,6 @@ func TestPostgresCollectorTaskSurvivesRestartAndRejectsStaleFence(t *testing.T) 
 	if err := repositoryBeforeRestart.AddContext(ctx, task); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if _, cleanupErr := database.ExecContext(context.Background(),
-			`DELETE FROM broker_collector_tasks WHERE id = $1`, taskID); cleanupErr != nil {
-			t.Errorf("delete integration collector task: %v", cleanupErr)
-		}
-	})
 	now := time.Now().UTC()
 	firstLease, err := repositoryBeforeRestart.AcquireContext(ctx, taskID, "spiffe://example.test/collector/a",
 		now, 10*time.Second)
@@ -97,12 +96,15 @@ func TestPostgresCollectorTaskSurvivesRestartAndRejectsStaleFence(t *testing.T) 
 		secondLease.FencingToken, "decision-second", "grant-second", now.Add(13*time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	evidenceEnvelope := persistRestartEvidence(t, ctx, database, repositoryAfterRestart, taskID, secondLease,
+		now.Add(13*time.Second))
 	if err := repositoryAfterRestart.BeginCommitContext(ctx, taskID, secondLease.Owner,
 		secondLease.FencingToken, now.Add(14*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if err := repositoryAfterRestart.CommitContext(ctx, taskID, secondLease.Owner,
-		secondLease.FencingToken, "attempt-second", "evidence-second", now.Add(15*time.Second)); err != nil {
+		secondLease.FencingToken, evidenceEnvelope.AcceptedAttemptID, evidenceEnvelope.EvidenceID,
+		now.Add(15*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -114,14 +116,70 @@ func TestPostgresCollectorTaskSurvivesRestartAndRejectsStaleFence(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != collector.TaskSucceeded || stored.AcceptedAttemptID != "attempt-second" ||
-		stored.AcceptedEvidenceID != "evidence-second" || stored.ExecutionGrantID != "grant-second" {
+	if stored.State != collector.TaskSucceeded || stored.AcceptedAttemptID != evidenceEnvelope.AcceptedAttemptID ||
+		stored.AcceptedEvidenceID != evidenceEnvelope.EvidenceID || stored.ExecutionGrantID != "grant-second" {
 		t.Fatalf("unexpected persisted collector task: %+v", stored)
 	}
 	if err := repositoryAfterSecondRestart.CommitContext(ctx, taskID, secondLease.Owner,
 		secondLease.FencingToken, "attempt-third", "evidence-third", now.Add(16*time.Second)); !errors.Is(err, collector.ErrDuplicateCommit) {
 		t.Fatalf("expected exactly-one accepted result after restart, got %v", err)
 	}
+}
+
+func persistRestartEvidence(t *testing.T, ctx context.Context, database *sql.DB,
+	tasks *collector.PostgresRepository, taskID string, lease collector.Lease, assembledAt time.Time,
+) evidence.EvidenceEnvelope {
+	t.Helper()
+	task, err := tasks.GetContext(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembler, err := evidence.NewAssembler("restart-test-v1", private, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptID := fmt.Sprintf("attempt-%s-%d", taskID, lease.FencingToken)
+	envelope, err := assembler.AssembleContext(ctx, evidence.AssemblyInput{
+		TenantID: task.TenantID, ClaimFingerprint: task.ClaimFingerprint, TaskID: task.ID,
+		TargetSnapshotID: task.TargetSnapshotID, TargetID: task.TargetID, RecipeID: task.RecipeID,
+		RecipeVersion: task.RecipeVersion, TriggerDecisionID: task.TriggerDecisionID,
+		PlanningDecisionID: task.PlanningDecisionID, ExecutionDecisionID: task.ExecutionDecisionID,
+		ExecutionGrantID: task.ExecutionGrantID, AcceptedAttemptID: attemptID, FencingToken: lease.FencingToken,
+		CompatibilityRecordHash: task.CompatibilityHash,
+		Captured: artefacts.CapturedRef{
+			URI: "artefact://restart/captured", SHA256Digest: strings.Repeat("a", 64), ByteCount: 16,
+			MediaType: "application/json", Transport: "gnmi", CapturedAt: assembledAt,
+			AttemptID: attemptID, EncryptionKeyRef: "kms://restart/v1",
+		},
+		Sanitised: artefacts.SanitisedRef{
+			URI: "artefact://restart/sanitised", SHA256Digest: strings.Repeat("b", 64), ByteCount: 16,
+			MediaType: "application/json", ParentCapturedDigest: strings.Repeat("a", 64),
+			TransformationManifestDigest: strings.Repeat("c", 64), CreatedAt: assembledAt,
+		},
+		ParserID: "interface-state", ParserVersion: "v1", NormaliserVersion: "v1", Completeness: 1,
+		ValidUntil: assembledAt.Add(time.Minute), Observation: parsing.InterfaceOperationalState{
+			SchemaVersion: "v1", InterfaceName: "Ethernet1", OperationalState: "up", ObservedAt: assembledAt,
+			TaintedFields: []string{"interface_name"},
+		},
+		CollectorIdentity: lease.Owner, CollectorVersion: "restart-test-v1",
+		AuditReference: "audit-restart", AssembledAt: assembledAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := evidence.NewPostgresRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Create(ctx, envelope); err != nil {
+		t.Fatal(err)
+	}
+
+	return envelope
 }
 
 func durableCollectorTask(taskID string) collector.Task {

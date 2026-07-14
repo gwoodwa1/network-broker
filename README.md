@@ -144,6 +144,8 @@ PostgreSQL deployments must apply the versioned scripts in `migrations/` before 
 
 Migration `000007_collector_tasks` persists the complete collector task authority record. `collector.PostgresRepository` performs guarded lease, fencing, execution-authority, retry and exactly-one accepted-result updates, while the worker consumes the same context-aware repository boundary as the deterministic memory store. Repository restart tests prove that a live lease survives process loss, an expired lease advances the fencing epoch, and the old attempt cannot assemble or commit evidence. See [durable collector task authority](docs/collector-task-persistence.md).
 
+Migrations `000008_evidence_envelopes` and `000009_disclosure_records` add append-only PostgreSQL repositories for signed evidence envelopes, actor-bound disclosure decisions and signed delivery receipts. Task success is foreign-key bound to an existing envelope. Receipt creation is idempotent per tenant, actor and request ID: an identical retry returns the original receipt, while reuse for another payload fails closed. Tenant-aware retrieval loads both the envelope and disclosure authority from durable repositories. See [durable evidence and disclosure](docs/evidence-disclosure-persistence.md).
+
 The control-plane entrypoint requires `DATABASE_URL`, `NATS_URL`, and a deployment-unique `OUTBOX_WORKER_ID`. It verifies PostgreSQL and NATS connectivity before becoming ready and exposes `GET /livez`, `GET /readyz`, and Prometheus-format `GET /metrics` endpoints. Set `APPLY_MIGRATIONS=true` only for an instance authorised to apply the embedded, checksum-verified migrations; concurrent migration attempts are serialised with a PostgreSQL advisory lock. `LISTEN_ADDRESS` defaults to `:8080`.
 
 The NATS stream is provisioned separately from the application and must cover the configured subject. `NATS_STREAM` defaults to `BROKER_EVENTS` and `NATS_SUBJECT` to `network-broker.events`. Production authentication can use `NATS_CREDENTIALS_FILE`; TLS trust and mutual TLS identity can be configured with `NATS_CA_FILE`, `NATS_CERT_FILE`, and `NATS_KEY_FILE`.
@@ -172,7 +174,7 @@ This repository is a security-oriented prototype, not a production service. Impo
 - Vendor/release lab qualification and production runtime wiring for the gNMI, NETCONF and SSH adapters.
 - Production activation and administration surfaces for signed policy bundles and approvals.
 - SPIRE deployment, external credential-broker runtime integration and non-AWS HSM/KMS adapters.
-- Durable disclosure-receipt persistence, formal algorithm lifecycle policy and experimental standardized post-quantum providers.
+- Production runtime wiring for durable evidence/disclosure repositories, durable single-use credential-grant consumption, formal algorithm lifecycle policy and experimental standardized post-quantum providers.
 - Broader protocol-specific hostile-output corpora and operational tuning of quarantine rules against qualified device releases.
 - Tracing, audit-ledger export, resilience testing, dashboards, alerts, and rollout controls.
 - An independent security assessment; the repository includes a [review package](docs/security-review-package.md) but self-review does not satisfy this requirement.

@@ -11,7 +11,7 @@ import (
 )
 
 type EvidenceReader interface {
-	Get(evidenceID string) (evidence.EvidenceEnvelope, error)
+	GetForTenant(context.Context, string, string) (evidence.EvidenceEnvelope, error)
 }
 
 type Request struct {
@@ -40,7 +40,7 @@ func (s Service) RetrieveNormalised(ctx context.Context, request Request) (Resul
 		request.EvidenceID == "" || request.DecisionID == "" || request.RequestID == "" || len(request.Fields) == 0 {
 		return Result{}, fmt.Errorf("retrieval dependencies, identity, evidence, decision, request and fields are required")
 	}
-	envelope, err := s.Evidence.Get(request.EvidenceID)
+	envelope, err := s.Evidence.GetForTenant(ctx, request.TenantID, request.EvidenceID)
 	if err != nil {
 		return Result{}, err
 	}

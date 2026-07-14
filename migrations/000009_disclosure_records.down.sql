@@ -1,0 +1,7 @@
+DROP TRIGGER IF EXISTS broker_disclosure_receipts_immutable ON broker_disclosure_receipts;
+DROP TRIGGER IF EXISTS broker_disclosure_decisions_immutable ON broker_disclosure_decisions;
+DROP FUNCTION IF EXISTS broker_reject_disclosure_record_mutation();
+DROP INDEX IF EXISTS broker_disclosure_receipts_evidence_time_idx;
+DROP TABLE IF EXISTS broker_disclosure_receipts;
+DROP INDEX IF EXISTS broker_disclosure_decisions_lookup_idx;
+DROP TABLE IF EXISTS broker_disclosure_decisions;

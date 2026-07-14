@@ -12,7 +12,9 @@ import (
 
 type evidenceReader struct{ envelope evidence.EvidenceEnvelope }
 
-func (r evidenceReader) Get(string) (evidence.EvidenceEnvelope, error) { return r.envelope, nil }
+func (r evidenceReader) GetForTenant(context.Context, string, string) (evidence.EvidenceEnvelope, error) {
+	return r.envelope, nil
+}
 
 func TestRetrieveNormalisedIsActorSpecificAndReceipted(t *testing.T) {
 	disclosures := disclosure.NewService()

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sync"
 	"time"
 
 	"network_broker/internal/artefacts"
@@ -30,9 +29,7 @@ type PipelineSink struct {
 	NormaliserVersion string
 	Validity          time.Duration
 	Now               func() time.Time
-
-	mu        sync.RWMutex
-	envelopes map[string]EvidenceEnvelope
+	Envelopes         Repository
 }
 
 func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Pipeline, parser parsing.InterfaceStateParser,
@@ -53,8 +50,19 @@ func NewPipelineSinkWithKeyProvider(store artefacts.PipelineStore, sanitiser san
 	encryptionKeys keyprovider.EncryptionProvider, collectorVersion, normaliserVersion string,
 	validity time.Duration, now func() time.Time,
 ) (*PipelineSink, error) {
+	return NewPipelineSinkWithRepositories(store, sanitiser, parser, assembler, transportName,
+		encryptionKeys, NewMemoryRepository(), collectorVersion, normaliserVersion, validity, now)
+}
+
+// NewPipelineSinkWithRepositories constructs a pipeline with durable key and
+// immutable envelope persistence boundaries.
+func NewPipelineSinkWithRepositories(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
+	parser parsing.InterfaceStateParser, assembler *Assembler, transportName string,
+	encryptionKeys keyprovider.EncryptionProvider, envelopes Repository,
+	collectorVersion, normaliserVersion string, validity time.Duration, now func() time.Time,
+) (*PipelineSink, error) {
 	if store == nil || assembler == nil || transportName == "" || encryptionKeys == nil || collectorVersion == "" ||
-		normaliserVersion == "" || validity <= 0 {
+		envelopes == nil || normaliserVersion == "" || validity <= 0 {
 		return nil, fmt.Errorf("pipeline stores, identities, versions and positive validity are required")
 	}
 	if now == nil {
@@ -63,7 +71,7 @@ func NewPipelineSinkWithKeyProvider(store artefacts.PipelineStore, sanitiser san
 	return &PipelineSink{
 		Artefacts: store, Sanitiser: sanitiser, Parser: parser, Assembler: assembler,
 		TransportName: transportName, EncryptionKeys: encryptionKeys, CollectorVersion: collectorVersion,
-		NormaliserVersion: normaliserVersion, Validity: validity, Now: now, envelopes: make(map[string]EvidenceEnvelope),
+		NormaliserVersion: normaliserVersion, Validity: validity, Now: now, Envelopes: envelopes,
 	}, nil
 }
 
@@ -123,18 +131,16 @@ func (s *PipelineSink) WriteCaptured(ctx context.Context, task collector.Task, l
 	if err != nil {
 		return "", "", err
 	}
-	s.mu.Lock()
-	s.envelopes[envelope.EvidenceID] = envelope
-	s.mu.Unlock()
+	if err := s.Envelopes.Create(ctx, envelope); err != nil {
+		return "", "", fmt.Errorf("persist evidence envelope: %w", err)
+	}
 	return attemptID, envelope.EvidenceID, nil
 }
 
 func (s *PipelineSink) Get(evidenceID string) (EvidenceEnvelope, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	envelope, ok := s.envelopes[evidenceID]
-	if !ok {
-		return EvidenceEnvelope{}, fmt.Errorf("evidence %q not found", evidenceID)
-	}
-	return envelope, nil
+	return s.Envelopes.GetByID(context.Background(), evidenceID)
+}
+
+func (s *PipelineSink) GetForTenant(ctx context.Context, tenantID, evidenceID string) (EvidenceEnvelope, error) {
+	return s.Envelopes.GetForTenant(ctx, tenantID, evidenceID)
 }

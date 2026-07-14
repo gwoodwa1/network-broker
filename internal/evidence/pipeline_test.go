@@ -158,7 +158,8 @@ func TestPipelineSinkPersistsQuarantineLineageWithoutSigningEvidence(t *testing.
 	if !store.manifest.Quarantined || string(store.sanitisedPayload) != `{"quarantined":true}` {
 		t.Fatalf("quarantine lineage was not persisted safely: payload=%s manifest=%+v", store.sanitisedPayload, store.manifest)
 	}
-	if len(sink.envelopes) != 0 {
+	envelopes, ok := sink.Envelopes.(*MemoryRepository)
+	if !ok || len(envelopes.envelopes) != 0 {
 		t.Fatal("quarantined evidence was signed")
 	}
 }

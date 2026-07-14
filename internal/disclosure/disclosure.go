@@ -7,9 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"network_broker/internal/cryptosign"
@@ -72,12 +72,9 @@ type DecisionRequest struct {
 }
 
 type Service struct {
-	mu        sync.Mutex
-	decisions map[string]*Decision
-	receipts  map[string]*Receipt
-	now       func() time.Time
-	signing   *cryptosign.Manager
-	sequence  uint64
+	repository Repository
+	now        func() time.Time
+	signing    *cryptosign.Manager
 }
 
 func NewService() *Service { return NewServiceWithClock(time.Now) }
@@ -98,19 +95,28 @@ func NewServiceWithClock(now func() time.Time) *Service {
 // signed through opaque providers. The manager may require multiple
 // signatures during an algorithm migration.
 func NewServiceWithSigning(now func() time.Time, signing *cryptosign.Manager) (*Service, error) {
+	return NewServiceWithRepositoryAndSigning(now, NewMemoryRepository(), signing)
+}
+
+func NewServiceWithRepositoryAndSigning(now func() time.Time, repository Repository,
+	signing *cryptosign.Manager,
+) (*Service, error) {
 	if now == nil {
 		now = time.Now
 	}
-	if signing == nil {
-		return nil, fmt.Errorf("signature manager is required")
+	if repository == nil || signing == nil {
+		return nil, fmt.Errorf("disclosure repository and signature manager are required")
 	}
-	return &Service{
-		decisions: make(map[string]*Decision), receipts: make(map[string]*Receipt), now: now, signing: signing,
-	}, nil
+
+	return &Service{repository: repository, now: now, signing: signing}, nil
 }
 
 // Evaluate stores a fresh actor- and evidence-specific disclosure decision.
 func (s *Service) Evaluate(request DecisionRequest) (*Decision, error) {
+	return s.EvaluateContext(context.Background(), request)
+}
+
+func (s *Service) EvaluateContext(ctx context.Context, request DecisionRequest) (*Decision, error) {
 	if request.ActorID == "" || request.TenantID == "" || request.EvidenceID == "" || request.Representation == "" ||
 		request.PolicyBundleDigest == "" || request.InputDigest == "" || request.TTL <= 0 {
 		return nil, fmt.Errorf("actor, tenant, evidence, representation, policy lineage and positive ttl are required")
@@ -119,18 +125,21 @@ func (s *Service) Evaluate(request DecisionRequest) (*Decision, error) {
 		return nil, fmt.Errorf("at least one permitted field is required")
 	}
 	now := s.now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sequence++
+	decisionID, err := randomRecordID("disclosure")
+	if err != nil {
+		return nil, err
+	}
 	decision := &Decision{
-		DecisionID: fmt.Sprintf("disclosure-%s-%d", request.EvidenceID, s.sequence), ActorID: request.ActorID,
+		DecisionID: decisionID, ActorID: request.ActorID,
 		TenantID: request.TenantID, EvidenceID: request.EvidenceID, PolicyBundleDigest: request.PolicyBundleDigest,
 		PolicyInputDigest: request.InputDigest, PermittedFields: uniqueSorted(request.PermittedFields),
 		PermittedRepresentation: request.Representation, RequiredRedactions: uniqueSorted(request.RequiredRedactions),
 		AllowTaintedFields: request.AllowTaintedFields,
 		EvaluatedAt:        now, ExpiresAt: now.Add(request.TTL),
 	}
-	s.decisions[decision.DecisionID] = decision
+	if err := s.repository.CreateDecision(ctx, *decision); err != nil {
+		return nil, fmt.Errorf("persist disclosure decision: %w", err)
+	}
 	decisionCopy := *decision
 	decisionCopy.PermittedFields = append([]string(nil), decision.PermittedFields...)
 	decisionCopy.RequiredRedactions = append([]string(nil), decision.RequiredRedactions...)
@@ -169,9 +178,9 @@ func (s *Service) DeliverContextWithTaint(ctx context.Context, decisionID, actor
 		return nil, nil, fmt.Errorf("decision, actor, tenant, evidence, request, representation and fields are required")
 	}
 	now := s.now().UTC()
-	decision, ok := s.decisionForDelivery(decisionID)
-	if !ok {
-		return nil, nil, fmt.Errorf("disclosure decision %q not found", decisionID)
+	decision, err := s.repository.GetDecision(ctx, tenantID, decisionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get disclosure decision %q: %w", decisionID, err)
 	}
 	delivered, fieldNames, err := validateDelivery(decision, now, actorID, tenantID, evidenceID, representation, fields, redactions)
 	if err != nil {
@@ -189,10 +198,10 @@ func (s *Service) DeliverContextWithTaint(ctx context.Context, decisionID, actor
 		return nil, nil, fmt.Errorf("encode delivered payload: %w", err)
 	}
 	digest := sha256.Sum256(payload)
-	s.mu.Lock()
-	s.sequence++
-	receiptID := fmt.Sprintf("receipt-%s-%d", decision.EvidenceID, s.sequence)
-	s.mu.Unlock()
+	receiptID, err := randomRecordID("receipt")
+	if err != nil {
+		return nil, nil, err
+	}
 	receipt := &Receipt{
 		SchemaVersion: receiptSchemaVersion, ReceiptID: receiptID, TenantID: decision.TenantID,
 		EvidenceID: decision.EvidenceID, ActorID: decision.ActorID, DisclosureDecisionID: decision.DecisionID,
@@ -205,33 +214,48 @@ func (s *Service) DeliverContextWithTaint(ctx context.Context, decisionID, actor
 	if len(tainted) > 0 {
 		receipt.TaintWarning = taintedDataWarning
 	}
-	canonical, err := canonicalReceipt(*receipt)
+	storedReceipt, err := s.persistReceipt(ctx, *receipt)
 	if err != nil {
 		return nil, nil, err
 	}
-	receipt.SignatureSet, err = s.signing.Sign(ctx, receiptSigningPurpose, receiptSigningDomain, canonical)
-	if err != nil {
-		return nil, nil, fmt.Errorf("sign disclosure receipt: %w", err)
-	}
-	storedReceipt := cloneReceipt(receipt)
-	s.mu.Lock()
-	s.receipts[receipt.ReceiptID] = &storedReceipt
-	s.mu.Unlock()
-	receiptCopy := cloneReceipt(receipt)
+	receiptCopy := cloneReceipt(&storedReceipt)
+
 	return delivered, &receiptCopy, nil
 }
 
-func (s *Service) decisionForDelivery(decisionID string) (Decision, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	decision, ok := s.decisions[decisionID]
-	if !ok {
-		return Decision{}, false
+func (s *Service) persistReceipt(ctx context.Context, receipt Receipt) (Receipt, error) {
+	existing, err := s.repository.GetReceiptByRequest(ctx, receipt.TenantID, receipt.ActorID, receipt.RequestID)
+	if err == nil {
+		if !sameDelivery(existing, receipt) {
+			return Receipt{}, ErrReceiptConflict
+		}
+		if err := s.VerifyReceipt(ctx, existing); err != nil {
+			return Receipt{}, fmt.Errorf("verify idempotent disclosure receipt: %w", err)
+		}
+
+		return existing, nil
 	}
-	decisionCopy := *decision
-	decisionCopy.PermittedFields = append([]string(nil), decision.PermittedFields...)
-	decisionCopy.RequiredRedactions = append([]string(nil), decision.RequiredRedactions...)
-	return decisionCopy, true
+	if !errors.Is(err, ErrReceiptNotFound) {
+		return Receipt{}, fmt.Errorf("check disclosure request idempotency: %w", err)
+	}
+	canonical, err := canonicalReceipt(receipt)
+	if err != nil {
+		return Receipt{}, err
+	}
+	receipt.SignatureSet, err = s.signing.Sign(ctx, receiptSigningPurpose, receiptSigningDomain, canonical)
+	if err != nil {
+		return Receipt{}, fmt.Errorf("sign disclosure receipt: %w", err)
+	}
+	storedReceipt, err := s.repository.CreateReceipt(ctx, receipt)
+	if err != nil {
+		return Receipt{}, fmt.Errorf("persist disclosure receipt: %w", err)
+	}
+
+	return storedReceipt, nil
+}
+
+func (s *Service) GetReceipt(ctx context.Context, tenantID, receiptID string) (Receipt, error) {
+	return s.repository.GetReceipt(ctx, tenantID, receiptID)
 }
 
 func validateTaintedFields(delivered, tainted []string) ([]string, error) {
@@ -499,6 +523,15 @@ func cloneReceipt(receipt *Receipt) Receipt {
 		clone.SignatureSet.Signatures[index].Value = append([]byte(nil), receipt.SignatureSet.Signatures[index].Value...)
 	}
 	return clone
+}
+
+func randomRecordID(prefix string) (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate %s id: %w", prefix, err)
+	}
+
+	return prefix + "-" + hex.EncodeToString(value), nil
 }
 
 func localSigningManager() (*cryptosign.Manager, error) {
