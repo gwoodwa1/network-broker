@@ -99,11 +99,12 @@ func (r *PostgresRepository) Create(ctx context.Context, envelope EvidenceEnvelo
 	result, err := r.database.ExecContext(ctx, `
 		INSERT INTO broker_evidence_envelopes (
 			evidence_id, tenant_id, task_id, accepted_attempt_id, fencing_token,
-			target_id, recipe_id, observed_at, valid_until, document, document_digest
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			execution_grant_id, target_id, recipe_id, observed_at, valid_until,
+			document, document_digest
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (evidence_id) DO NOTHING`,
 		envelope.EvidenceID, envelope.TenantID, envelope.TaskID, envelope.AcceptedAttemptID,
-		envelope.FencingToken, envelope.TargetID, envelope.RecipeID, envelope.ObservedAt,
+		envelope.FencingToken, envelope.ExecutionGrantID, envelope.TargetID, envelope.RecipeID, envelope.ObservedAt,
 		envelope.ValidUntil, document, digest)
 	if err != nil {
 		return fmt.Errorf("insert evidence envelope: %w", err)
@@ -136,8 +137,9 @@ func (r *PostgresRepository) GetForTenant(ctx context.Context, tenantID, evidenc
 	}
 
 	return scanStoredEnvelope(r.database.QueryRowContext(ctx, `
-		SELECT tenant_id, task_id, accepted_attempt_id, fencing_token, target_id,
-			recipe_id, observed_at, valid_until, document, document_digest
+		SELECT tenant_id, task_id, accepted_attempt_id, fencing_token,
+			execution_grant_id, target_id, recipe_id, observed_at, valid_until,
+			document, document_digest
 		FROM broker_evidence_envelopes WHERE evidence_id = $1 AND tenant_id = $2`, evidenceID, tenantID), evidenceID)
 }
 
@@ -147,8 +149,9 @@ func (r *PostgresRepository) GetByID(ctx context.Context, evidenceID string) (Ev
 	}
 
 	return scanStoredEnvelope(r.database.QueryRowContext(ctx, `
-		SELECT tenant_id, task_id, accepted_attempt_id, fencing_token, target_id,
-			recipe_id, observed_at, valid_until, document, document_digest
+		SELECT tenant_id, task_id, accepted_attempt_id, fencing_token,
+			execution_grant_id, target_id, recipe_id, observed_at, valid_until,
+			document, document_digest
 		FROM broker_evidence_envelopes WHERE evidence_id = $1`, evidenceID), evidenceID)
 }
 
@@ -157,12 +160,12 @@ type storedEnvelopeRow interface {
 }
 
 func scanStoredEnvelope(row storedEnvelopeRow, evidenceID string) (EvidenceEnvelope, error) {
-	var storedTenant, taskID, attemptID, targetID, recipeID, digest string
+	var storedTenant, taskID, attemptID, executionGrantID, targetID, recipeID, digest string
 	var fencingToken int64
 	var observedAt, validUntil sql.NullTime
 	var document []byte
 	err := row.Scan(
-		&storedTenant, &taskID, &attemptID, &fencingToken, &targetID, &recipeID,
+		&storedTenant, &taskID, &attemptID, &fencingToken, &executionGrantID, &targetID, &recipeID,
 		&observedAt, &validUntil, &document, &digest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return EvidenceEnvelope{}, ErrEnvelopeNotFound
@@ -179,7 +182,8 @@ func scanStoredEnvelope(row storedEnvelopeRow, evidenceID string) (EvidenceEnvel
 	}
 	if envelope.EvidenceID != evidenceID || envelope.TenantID != storedTenant || envelope.TaskID != taskID ||
 		envelope.AcceptedAttemptID != attemptID || envelope.FencingToken != fencingToken ||
-		envelope.TargetID != targetID || envelope.RecipeID != recipeID || !observedAt.Valid || !validUntil.Valid ||
+		envelope.ExecutionGrantID != executionGrantID || envelope.TargetID != targetID ||
+		envelope.RecipeID != recipeID || !observedAt.Valid || !validUntil.Valid ||
 		!envelope.ObservedAt.UTC().Truncate(time.Microsecond).Equal(observedAt.Time) ||
 		!envelope.ValidUntil.UTC().Truncate(time.Microsecond).Equal(validUntil.Time) {
 		return EvidenceEnvelope{}, ErrEnvelopeIntegrity

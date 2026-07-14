@@ -113,6 +113,60 @@ func TestAuthorityVerifiesGrantsIssuedBeforeSigningKeyRotation(t *testing.T) {
 	}
 }
 
+func TestSharedConsumptionRepositorySurvivesAuthorityRecreation(t *testing.T) {
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring, err := keyprovider.NewEd25519Keyring("grant-key-v1", private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+	fences := &fenceStore{tokens: map[string]int64{"task-1": 7}}
+	consumptions := NewMemoryConsumptionRepository()
+	firstAuthority, err := NewAuthorityWithProviderAndRepository(
+		"credential-broker", "site-a", keyring, fences, consumptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := firstAuthority.Issue(validGrant(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ExchangeRequest{
+		PresentingSPIFFEID: grant.CollectorSPIFFEID, TaskID: grant.TaskID,
+		TargetID: grant.TargetID, RecipeID: grant.RecipeID,
+		RecipeVersion: grant.RecipeVersion, FencingToken: grant.FencingToken, Now: now,
+	}
+	if _, err := firstAuthority.Exchange(grant, request); err != nil {
+		t.Fatal(err)
+	}
+	secondAuthority, err := NewAuthorityWithProviderAndRepository(
+		"credential-broker", "site-a", keyring, fences, consumptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secondAuthority.Exchange(grant, request); !errors.Is(err, ErrAlreadyConsumed) {
+		t.Fatalf("expected recreated authority to reject consumed grant, got %v", err)
+	}
+	record, err := consumptions.Get(context.Background(), grant.TenantID, grant.GrantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.NonceDigest == grant.Nonce || len(record.NonceDigest) != 64 {
+		t.Fatalf("raw grant nonce crossed persistence boundary: %+v", record)
+	}
+}
+
+func TestIssueRejectsReusableExecutionGrant(t *testing.T) {
+	authority, grant, _, _ := fixture(t)
+	grant.SingleUse = false
+	if _, err := authority.Issue(grant); err == nil {
+		t.Fatal("expected reusable execution grant to be rejected")
+	}
+}
+
 func fixture(t *testing.T) (*Authority, ExecutionGrant, ExchangeRequest, *fenceStore) {
 	t.Helper()
 	_, private, err := ed25519.GenerateKey(nil)

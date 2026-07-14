@@ -2,7 +2,7 @@
 
 Signed evidence and delivery receipts are authority-bearing records. Losing them on restart would make a successfully committed task unverifiable and could let a retried disclosure produce a second receipt for the same caller request.
 
-Migration `000008_evidence_envelopes` stores the exact signed envelope bytes and their SHA-256 digest. Indexed identity, task, attempt, fence, target, recipe and validity fields are compared with the decoded document on every read. Records are append-only, tenant-scoped and unique per task attempt. A collector task cannot transition to `succeeded` with an evidence identifier that is absent from the envelope table.
+Migration `000008_evidence_envelopes` stores the exact signed envelope bytes and their SHA-256 digest. Indexed identity, task, attempt, fence, target, recipe and validity fields are compared with the decoded document on every read. Migration `000011` additionally indexes the execution-grant binding used by crash reconciliation. Records are append-only, tenant-scoped and unique per task attempt. A collector task cannot transition to `succeeded` with an evidence identifier that is absent from the envelope table.
 
 Migration `000009_disclosure_records` stores:
 
@@ -36,4 +36,4 @@ POSTGRES_TEST_DSN='postgres://...' go test -tags integration ./test/integration
 
 ## Remaining work
 
-The production control plane and collector must construct these repositories from deployment configuration. Evidence creation, task commit and event publication also need an explicit reconciliation contract for process loss between their separate durable writes. Single-use execution-grant consumption remains process-local and is the remaining authority-persistence item in the first production gate.
+The production control plane and collector must construct these repositories from deployment configuration. Migration `000011` and `ReconcileExpiredEvidenceContext` now define recovery for process loss between evidence creation and task commit. Event publication still requires transactional outbox integration with the accepted-result transition, and the reconciliation loop needs production scheduling, metrics and alerting.

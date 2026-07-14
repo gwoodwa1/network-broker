@@ -5,11 +5,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"network_broker/internal/keyprovider"
@@ -18,11 +18,13 @@ import (
 const executionGrantSigningPurpose = "execution-grant"
 
 var (
-	ErrInvalidSignature = errors.New("execution grant signature is invalid")
-	ErrNotCurrent       = errors.New("execution grant is not currently valid")
-	ErrBindingMismatch  = errors.New("execution grant binding does not match")
-	ErrStaleFence       = errors.New("execution grant fencing token is stale")
-	ErrAlreadyConsumed  = errors.New("execution grant has already been consumed")
+	ErrInvalidSignature     = errors.New("execution grant signature is invalid")
+	ErrNotCurrent           = errors.New("execution grant is not currently valid")
+	ErrBindingMismatch      = errors.New("execution grant binding does not match")
+	ErrStaleFence           = errors.New("execution grant fencing token is stale")
+	ErrAlreadyConsumed      = errors.New("execution grant has already been consumed")
+	ErrConsumptionNotFound  = errors.New("execution grant consumption was not found")
+	ErrConsumptionIntegrity = errors.New("execution grant consumption integrity verification failed")
 )
 
 // ExecutionGrant contains immutable authority to contact exactly one target
@@ -92,13 +94,11 @@ type FenceReader interface {
 
 // Authority signs grants and atomically exchanges valid grants for credentials.
 type Authority struct {
-	issuer   string
-	audience string
-	signing  keyprovider.SigningProvider
-	fences   FenceReader
-
-	mu       sync.Mutex
-	consumed map[string]struct{}
+	issuer       string
+	audience     string
+	signing      keyprovider.SigningProvider
+	fences       FenceReader
+	consumptions ConsumptionRepository
 }
 
 func NewAuthority(issuer, audience string, private ed25519.PrivateKey, fences FenceReader) (*Authority, error) {
@@ -118,13 +118,24 @@ func NewAuthority(issuer, audience string, private ed25519.PrivateKey, fences Fe
 func NewAuthorityWithProvider(issuer, audience string, signing keyprovider.SigningProvider,
 	fences FenceReader,
 ) (*Authority, error) {
-	if issuer == "" || audience == "" || signing == nil || fences == nil {
-		return nil, fmt.Errorf("issuer, audience, signing provider and fence reader are required")
+	return NewAuthorityWithProviderAndRepository(issuer, audience, signing, fences,
+		NewMemoryConsumptionRepository())
+}
+
+// NewAuthorityWithProviderAndRepository creates an authority backed by an
+// explicit single-use consumption repository. Production callers must supply
+// a durable repository shared by every credential-broker replica.
+func NewAuthorityWithProviderAndRepository(issuer, audience string,
+	signing keyprovider.SigningProvider, fences FenceReader,
+	consumptions ConsumptionRepository,
+) (*Authority, error) {
+	if issuer == "" || audience == "" || signing == nil || fences == nil || consumptions == nil {
+		return nil, fmt.Errorf("issuer, audience, signing provider, fence reader and consumption repository are required")
 	}
 
 	return &Authority{
 		issuer: issuer, audience: audience, signing: signing, fences: fences,
-		consumed: make(map[string]struct{}),
+		consumptions: consumptions,
 	}, nil
 }
 
@@ -180,6 +191,9 @@ func (a *Authority) ExchangeContext(ctx context.Context, grant ExecutionGrant,
 	if grant.Issuer != a.issuer || grant.Audience != a.audience || request.Now.Before(grant.NotBefore) || !request.Now.Before(grant.ExpiresAt) {
 		return SessionCredential{}, ErrNotCurrent
 	}
+	if !grant.SingleUse {
+		return SessionCredential{}, ErrBindingMismatch
+	}
 	if request.PresentingSPIFFEID != grant.CollectorSPIFFEID || request.TaskID != grant.TaskID ||
 		request.TargetID != grant.TargetID || request.RecipeID != grant.RecipeID ||
 		request.RecipeVersion != grant.RecipeVersion || request.FencingToken != grant.FencingToken {
@@ -192,18 +206,25 @@ func (a *Authority) ExchangeContext(ctx context.Context, grant ExecutionGrant,
 	if currentFence != grant.FencingToken {
 		return SessionCredential{}, ErrStaleFence
 	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, exists := a.consumed[grant.Nonce]; grant.SingleUse && exists {
-		return SessionCredential{}, ErrAlreadyConsumed
-	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
 		return SessionCredential{}, fmt.Errorf("mint session credential: %w", err)
 	}
-	if grant.SingleUse {
-		a.consumed[grant.Nonce] = struct{}{}
+	grantDocument, err := json.Marshal(grant)
+	if err != nil {
+		return SessionCredential{}, fmt.Errorf("encode execution grant for consumption: %w", err)
+	}
+	nonceDigest := sha256.Sum256([]byte(grant.Nonce))
+	grantDigest := sha256.Sum256(grantDocument)
+	if _, err := a.consumptions.Consume(ctx, Consumption{
+		GrantID: grant.GrantID, NonceDigest: hex.EncodeToString(nonceDigest[:]),
+		GrantDigest: hex.EncodeToString(grantDigest[:]), TenantID: grant.TenantID,
+		TaskID: grant.TaskID, CollectorSPIFFEID: grant.CollectorSPIFFEID,
+		TargetID: grant.TargetID, RecipeID: grant.RecipeID, RecipeVersion: grant.RecipeVersion,
+		FencingToken: grant.FencingToken, GrantExpiresAt: grant.ExpiresAt,
+		RequestedAt: request.Now,
+	}); err != nil {
+		return SessionCredential{}, err
 	}
 	return SessionCredential{
 		Token: hex.EncodeToString(tokenBytes), GrantID: grant.GrantID,
@@ -225,6 +246,9 @@ func validateGrant(grant ExecutionGrant) error {
 	}
 	if grant.NotBefore.IsZero() || !grant.ExpiresAt.After(grant.NotBefore) {
 		return fmt.Errorf("grant validity window is invalid")
+	}
+	if !grant.SingleUse {
+		return fmt.Errorf("execution grant must be single use")
 	}
 	return nil
 }

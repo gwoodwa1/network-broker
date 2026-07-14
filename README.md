@@ -146,6 +146,8 @@ Migration `000007_collector_tasks` persists the complete collector task authorit
 
 Migrations `000008_evidence_envelopes` and `000009_disclosure_records` add append-only PostgreSQL repositories for signed evidence envelopes, actor-bound disclosure decisions and signed delivery receipts. Task success is foreign-key bound to an existing envelope. Receipt creation is idempotent per tenant, actor and request ID: an identical retry returns the original receipt, while reuse for another payload fails closed. Tenant-aware retrieval loads both the envelope and disclosure authority from durable repositories. See [durable evidence and disclosure](docs/evidence-disclosure-persistence.md).
 
+Migrations `000010_execution_grant_consumptions` and `000011_evidence_acceptance_reconciliation` close the remaining process-local authority gaps. Credential exchange records a one-way nonce digest and complete task/fence/grant binding in an append-only PostgreSQL ledger before releasing a credential. Concurrent broker replicas can consume a grant only once, and restart cannot revive it. If a collector disappears after persisting signed evidence but before committing its task, reconciliation waits for lease expiry and accepts the envelope only when the task's tenant, fencing token and execution-grant binding remain unchanged. See [durable execution grants and crash reconciliation](docs/execution-grant-persistence.md).
+
 The control-plane entrypoint requires `DATABASE_URL`, `NATS_URL`, and a deployment-unique `OUTBOX_WORKER_ID`. It verifies PostgreSQL and NATS connectivity before becoming ready and exposes `GET /livez`, `GET /readyz`, and Prometheus-format `GET /metrics` endpoints. Set `APPLY_MIGRATIONS=true` only for an instance authorised to apply the embedded, checksum-verified migrations; concurrent migration attempts are serialised with a PostgreSQL advisory lock. `LISTEN_ADDRESS` defaults to `:8080`.
 
 The NATS stream is provisioned separately from the application and must cover the configured subject. `NATS_STREAM` defaults to `BROKER_EVENTS` and `NATS_SUBJECT` to `network-broker.events`. Production authentication can use `NATS_CREDENTIALS_FILE`; TLS trust and mutual TLS identity can be configured with `NATS_CA_FILE`, `NATS_CERT_FILE`, and `NATS_KEY_FILE`.
@@ -174,7 +176,7 @@ This repository is a security-oriented prototype, not a production service. Impo
 - Vendor/release lab qualification and production runtime wiring for the gNMI, NETCONF and SSH adapters.
 - Production activation and administration surfaces for signed policy bundles and approvals.
 - SPIRE deployment, external credential-broker runtime integration and non-AWS HSM/KMS adapters.
-- Production runtime wiring for durable evidence/disclosure repositories, durable single-use credential-grant consumption, formal algorithm lifecycle policy and experimental standardized post-quantum providers.
+- Production runtime wiring for durable evidence, disclosure and execution-grant repositories; formal algorithm lifecycle policy; and experimental standardized post-quantum providers.
 - Broader protocol-specific hostile-output corpora and operational tuning of quarantine rules against qualified device releases.
 - Tracing, audit-ledger export, resilience testing, dashboards, alerts, and rollout controls.
 - An independent security assessment; the repository includes a [review package](docs/security-review-package.md) but self-review does not satisfy this requirement.

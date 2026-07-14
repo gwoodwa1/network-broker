@@ -25,4 +25,4 @@ POSTGRES_TEST_DSN='postgres://...' go test -tags integration ./test/integration 
 
 ## Remaining runtime work
 
-The control plane must create target tasks transactionally with resolution fan-out and its outbox event, and the collector executable must acquire tasks from this repository rather than constructing a local task. Database roles must prevent collectors from inserting tasks or bypassing guarded transitions. Evidence-envelope and disclosure persistence are now available, but production runtime wiring and single-use credential-grant persistence remain necessary before restart safety is complete end to end.
+The control plane must create target tasks transactionally with resolution fan-out and its outbox event, and the collector executable must acquire tasks from this repository rather than constructing a local task. Database roles must prevent collectors from inserting tasks or bypassing guarded transitions. Evidence, disclosure and single-use execution-grant authority are now durable. Production wiring must use those repositories and schedule expired-evidence reconciliation with bounded scans, metrics and alerts.

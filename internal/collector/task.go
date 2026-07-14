@@ -26,12 +26,13 @@ const (
 )
 
 var (
-	ErrTaskNotFound    = errors.New("collector task not found")
-	ErrLeaseHeld       = errors.New("collector task lease is held")
-	ErrStaleFence      = errors.New("collector task fencing token is stale")
-	ErrLeaseExpired    = errors.New("collector task lease has expired")
-	ErrInvalidState    = errors.New("collector task state transition is invalid")
-	ErrDuplicateCommit = errors.New("collector task already has an accepted result")
+	ErrTaskNotFound     = errors.New("collector task not found")
+	ErrLeaseHeld        = errors.New("collector task lease is held")
+	ErrStaleFence       = errors.New("collector task fencing token is stale")
+	ErrLeaseExpired     = errors.New("collector task lease has expired")
+	ErrInvalidState     = errors.New("collector task state transition is invalid")
+	ErrDuplicateCommit  = errors.New("collector task already has an accepted result")
+	ErrEvidenceNotFound = errors.New("reconcilable evidence envelope was not found")
 )
 
 // Task models the authoritative state for collecting evidence from one target.
