@@ -15,7 +15,7 @@ Only then is the consumption inserted. The grant identifier and SHA-256 digest o
 
 Credential bytes are minted before the durable insert but released only after it commits. A process failure after commitment can therefore burn a grant without exposing its credential. The task must retry through a new attempt, fence and grant; replaying the consumed grant is never an availability recovery mechanism.
 
-The memory consumption repository preserves conflict semantics for deterministic local workflows but is explicitly not production authority. Production credential brokers must share `PostgresConsumptionRepository` or an adapter with equivalent transactional guarantees.
+The memory consumption repository preserves conflict semantics for deterministic local workflows but is explicitly not production authority. `collectorruntime.New` requires an explicit credential exchange boundary and durable PostgreSQL authority; production credential-broker replicas must share `PostgresConsumptionRepository` or an adapter with equivalent transactional guarantees.
 
 ## Evidence acceptance crash window
 
@@ -26,7 +26,7 @@ This creates two safe race outcomes:
 - reconciliation wins before reacquisition and the task becomes `succeeded`; or
 - reacquisition increments the fencing token and the old envelope is retained for audit but cannot be accepted.
 
-Reconciliation is idempotent for the already accepted envelope. It rejects a live lease, a changed fence or grant, a competing accepted result and an invalid task state.
+Reconciliation is idempotent for the already accepted envelope. It rejects a live lease, a changed fence or grant, a competing accepted result and an invalid task state. The control-plane runner processes bounded deterministic batches, immediately drains full batches, backs off on failures and treats reacquisition races as expected skips.
 
 ## Verification
 

@@ -15,11 +15,194 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"network_broker/internal/authctx"
 	"network_broker/internal/collector"
+	"network_broker/internal/collectorruntime"
 	"network_broker/internal/grants"
 	"network_broker/internal/keyprovider"
+	"network_broker/internal/outbox"
+	"network_broker/internal/parsing"
+	"network_broker/internal/sanitise"
+	"network_broker/internal/transport"
 	"network_broker/migrations"
 )
+
+func TestProductionCollectorRuntimeUsesOnlyDurableAuthorityStores(t *testing.T) {
+	database, ctx := openGrantIntegrationDatabase(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	taskID := fmt.Sprintf("production-runtime-%d", now.UnixNano())
+	tasks, err := collector.NewPostgresRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := durableCollectorTask(taskID)
+	if err := tasks.AddContext(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring, err := keyprovider.NewEd25519Keyring("runtime-signing-key", private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumptions, err := grants.NewPostgresConsumptionRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectorID := "spiffe://broker.example/tenant/tenant-integration/role/collector/workload/site-1"
+	authority, err := grants.NewAuthorityWithProviderAndRepository(
+		"runtime-credential-broker", "runtime-site", keyring, tasks, consumptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(fmt.Sprintf(
+		`{"schema_version":"v1","interface_name":"Ethernet1","operational_state":"up","observed_at":%q}`,
+		now.Format(time.RFC3339Nano)))
+	runtime, err := collectorruntime.New(collectorruntime.Config{
+		Identity: authctx.AuthContext{
+			SubjectID: collectorID, SPIFFEID: collectorID, TenantID: task.TenantID,
+			Roles: []string{"collector"}, AllowedScopes: []string{"tasks:execute"},
+			CredentialClass: "mtls-spiffe", AuthenticatedAt: now, IdentityRevision: "svid-revision-1",
+		},
+		TransportName: "gnmi", CollectorVersion: "integration-v1",
+		AssemblerVersion: "integration-v1", NormaliserVersion: "integration-v1",
+		LeaseDuration: 30 * time.Second, GrantTTL: 30 * time.Second,
+		MaximumDuration: time.Second, MaximumBytes: 4096, EvidenceValidity: time.Minute,
+		Sanitiser: sanitise.Pipeline{ID: "safe-json", Version: "v1", MaximumBytes: 4096},
+		Parser:    parsing.InterfaceStateParser{ID: "interface-state", Version: "v1"},
+	}, collectorruntime.Dependencies{
+		Database: database, Blobs: &integrationBlobStore{objects: make(map[string][]byte)},
+		Signing: keyring, Encryption: keyprovider.StaticEncryptionProvider{Reference: "kms://runtime/capture"},
+		Transport:  transport.StubAdapter{Payload: payload, MediaType: "application/json"},
+		Authorizer: runtimeAllowAuthorizer{}, GrantIssuer: authority, Credentials: authority,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Run(ctx, taskID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := runtime.Task(ctx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != collector.TaskSucceeded || stored.AcceptedEvidenceID == "" {
+		t.Fatalf("unexpected durable runtime task: %+v", stored)
+	}
+	if _, err := runtime.Evidence(ctx, stored.AcceptedEvidenceID); err != nil {
+		t.Fatalf("read durable runtime evidence: %v", err)
+	}
+	restartedTasks, err := collector.NewPostgresRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedTask, err := restartedTasks.GetContext(ctx, taskID)
+	if err != nil || restartedTask.AcceptedEvidenceID != stored.AcceptedEvidenceID {
+		t.Fatalf("runtime authority did not survive reconstruction: task=%+v error=%v", restartedTask, err)
+	}
+}
+
+type runtimeAllowAuthorizer struct{}
+
+func (runtimeAllowAuthorizer) AuthorizeExecution(_ context.Context,
+	_ collector.ExecutionRequest,
+) (collector.ExecutionAuthorization, error) {
+	return collector.ExecutionAuthorization{
+		DecisionID: "runtime-execution-decision", MaximumDuration: time.Second, MaximumBytes: 4096,
+	}, nil
+}
+
+func TestResolutionTaskFanoutAndEventAreOneConcurrentTransaction(t *testing.T) {
+	database, ctx := openGrantIntegrationDatabase(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	resolutionID := fmt.Sprintf("fanout-resolution-%d", now.UnixNano())
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO broker_resolutions (
+			id, actor_id, tenant_id, idempotency_key, request_digest, state,
+			target_count, completed, version, created_at, updated_at
+		) VALUES ($1, 'actor-fanout', 'tenant-integration', $2, 'digest-fanout',
+			'planning', 0, FALSE, 3, $3, $3)`, resolutionID,
+		"idempotency-"+resolutionID, now); err != nil {
+		t.Fatal(err)
+	}
+	tasks := []collector.Task{
+		durableCollectorTask("fanout-task-a-" + resolutionID),
+		durableCollectorTask("fanout-task-b-" + resolutionID),
+	}
+	for index := range tasks {
+		tasks[index].ResolutionID = resolutionID
+		tasks[index].TargetID = fmt.Sprintf("router-%d", index+1)
+	}
+	firstRepository, err := collector.NewPostgresRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRepository, err := collector.NewPostgresRepository(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := []collector.FanoutRequest{
+		fanoutRequest(resolutionID, "fanout-event-a-"+resolutionID, tasks, now),
+		fanoutRequest(resolutionID, "fanout-event-b-"+resolutionID, tasks, now),
+	}
+	repositories := []*collector.PostgresRepository{firstRepository, secondRepository}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var waitGroup sync.WaitGroup
+	for index := range repositories {
+		waitGroup.Add(1)
+		go func(repository *collector.PostgresRepository, request collector.FanoutRequest) {
+			defer waitGroup.Done()
+			<-start
+			results <- repository.CreateFanoutContext(ctx, request)
+		}(repositories[index], requests[index])
+	}
+	close(start)
+	waitGroup.Wait()
+	close(results)
+	var successes, conflicts int
+	for fanoutErr := range results {
+		switch {
+		case fanoutErr == nil:
+			successes++
+		case errors.Is(fanoutErr, collector.ErrFanoutConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected fan-out error: %v", fanoutErr)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("expected one fan-out winner, successes=%d conflicts=%d", successes, conflicts)
+	}
+	var state string
+	var targetCount int
+	var version int64
+	if err := database.QueryRowContext(ctx, `
+		SELECT state, target_count, version FROM broker_resolutions WHERE id = $1`,
+		resolutionID).Scan(&state, &targetCount, &version); err != nil {
+		t.Fatal(err)
+	}
+	if state != "queued" || targetCount != len(tasks) || version != 4 {
+		t.Fatalf("unexpected queued resolution: state=%q targets=%d version=%d", state, targetCount, version)
+	}
+	var taskCount, eventCount int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM broker_collector_tasks WHERE resolution_id = $1`,
+		resolutionID).Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM broker_outbox
+		WHERE aggregate_id = $1 AND event_type = 'resolution.tasks_queued'`,
+		resolutionID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != len(tasks) || eventCount != 1 {
+		t.Fatalf("fan-out was not atomic: tasks=%d events=%d", taskCount, eventCount)
+	}
+}
 
 func TestExecutionGrantConsumptionSurvivesRestartAndIsConcurrentSingleUse(t *testing.T) {
 	database, ctx := openGrantIntegrationDatabase(t)
@@ -27,11 +210,11 @@ func TestExecutionGrantConsumptionSurvivesRestartAndIsConcurrentSingleUse(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	taskID := fmt.Sprintf("grant-consumption-%d", now.UnixNano())
+	taskID := fmt.Sprintf("grant-consumption-%d", time.Now().UnixNano())
 	if err := tasks.AddContext(ctx, durableCollectorTask(taskID)); err != nil {
 		t.Fatal(err)
 	}
+	now := postgresClock(t, ctx, database)
 	collectorID := "spiffe://example.test/collector/grant-integration"
 	lease, err := tasks.AcquireContext(ctx, taskID, collectorID, now, time.Minute)
 	if err != nil {
@@ -148,13 +331,13 @@ func TestExpiredEvidenceReconciliationAcceptsOnlyUnchangedFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now().UTC().Truncate(time.Microsecond)
 	collectorID := "spiffe://example.test/collector/reconciler"
 
-	recoverableTaskID := fmt.Sprintf("evidence-recoverable-%d", now.UnixNano())
+	recoverableTaskID := fmt.Sprintf("evidence-recoverable-%d", time.Now().UnixNano())
 	if err := tasks.AddContext(ctx, durableCollectorTask(recoverableTaskID)); err != nil {
 		t.Fatal(err)
 	}
+	now := postgresClock(t, ctx, database)
 	recoverableLease := prepareReconciliationAttempt(t, ctx, tasks, recoverableTaskID,
 		collectorID, "grant-recoverable", now)
 	recoverableEnvelope := persistRestartEvidence(t, ctx, database, tasks, recoverableTaskID,
@@ -166,8 +349,20 @@ func TestExpiredEvidenceReconciliationAcceptsOnlyUnchangedFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconciled, err := restartedTasks.ReconcileExpiredEvidenceContext(ctx,
-		recoverableEnvelope.EvidenceID, now.Add(6*time.Second))
+	metrics := &collector.ReconciliationMetrics{}
+	runner := collector.ReconciliationRunner{
+		Repository: restartedTasks, BatchSize: 10, PollInterval: time.Second,
+		FailureDelay: time.Second, Now: func() time.Time { return now.Add(6 * time.Second) },
+		Metrics: metrics,
+	}
+	count, err := runner.RunOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || metrics.Snapshot().Reconciled != 1 {
+		t.Fatalf("expected one runtime reconciliation, count=%d metrics=%+v", count, metrics.Snapshot())
+	}
+	reconciled, err := restartedTasks.GetContext(ctx, recoverableTaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,6 +394,24 @@ func TestExpiredEvidenceReconciliationAcceptsOnlyUnchangedFence(t *testing.T) {
 	}
 }
 
+func fanoutRequest(resolutionID, eventID string, tasks []collector.Task,
+	queuedAt time.Time,
+) collector.FanoutRequest {
+	payload := []byte(fmt.Sprintf(
+		`{"schema_version":"v1","resolution_id":%q,"task_count":%d}`,
+		resolutionID, len(tasks)))
+
+	return collector.FanoutRequest{
+		TenantID: "tenant-integration", ResolutionID: resolutionID,
+		ExpectedResolutionVersion: 3, Tasks: tasks, QueuedAt: queuedAt,
+		Event: outbox.Event{
+			ID: eventID, TenantID: "tenant-integration", AggregateType: "resolution",
+			AggregateID: resolutionID, Type: "resolution.tasks_queued",
+			Payload: payload, OccurredAt: queuedAt,
+		},
+	}
+}
+
 func openGrantIntegrationDatabase(t *testing.T) (*sql.DB, context.Context) {
 	t.Helper()
 	databaseURL := os.Getenv("POSTGRES_TEST_DSN")
@@ -221,6 +434,19 @@ func openGrantIntegrationDatabase(t *testing.T) (*sql.DB, context.Context) {
 	}
 
 	return database, ctx
+}
+
+// postgresClock obtains transition time from the same clock that owns the
+// task's database-generated created_at timestamp. This prevents a skewed test
+// runner clock from attempting to move updated_at before created_at.
+func postgresClock(t *testing.T, ctx context.Context, database *sql.DB) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := database.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatalf("read PostgreSQL clock: %v", err)
+	}
+
+	return now.UTC().Truncate(time.Microsecond)
 }
 
 func integrationExecutionGrant(taskID, collectorID string, fencingToken int64,

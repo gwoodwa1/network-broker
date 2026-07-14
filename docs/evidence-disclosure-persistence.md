@@ -36,4 +36,4 @@ POSTGRES_TEST_DSN='postgres://...' go test -tags integration ./test/integration
 
 ## Remaining work
 
-The production control plane and collector must construct these repositories from deployment configuration. Migration `000011` and `ReconcileExpiredEvidenceContext` now define recovery for process loss between evidence creation and task commit. Event publication still requires transactional outbox integration with the accepted-result transition, and the reconciliation loop needs production scheduling, metrics and alerting.
+The durable collector runtime now constructs the evidence repository alongside PostgreSQL task and artefact authority. Migration `000011` and `ReconcileExpiredEvidenceContext` define recovery for process loss between evidence creation and task commit; the control plane now schedules bounded reconciliation and exports metrics. Disclosure-service startup wiring and transactional accepted-result event publication remain open.

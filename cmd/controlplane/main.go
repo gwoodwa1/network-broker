@@ -21,6 +21,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"golang.org/x/sync/errgroup"
 
+	"network_broker/internal/collector"
 	"network_broker/internal/deadletter"
 	"network_broker/internal/operatorauth"
 	"network_broker/internal/outbox"
@@ -29,49 +30,63 @@ import (
 )
 
 const (
-	defaultListenAddress = ":8080"
-	shutdownTimeout      = 10 * time.Second
-	databaseTimeout      = 5 * time.Second
-	defaultNATSStream    = "BROKER_EVENTS"
-	defaultNATSSubject   = "network-broker.events"
-	defaultBatchSize     = 100
-	defaultMaxAttempts   = 10
-	defaultLease         = 30 * time.Second
-	defaultPollInterval  = 250 * time.Millisecond
-	defaultFailureDelay  = 2 * time.Second
+	defaultListenAddress           = ":8080"
+	shutdownTimeout                = 10 * time.Second
+	databaseTimeout                = 5 * time.Second
+	defaultNATSStream              = "BROKER_EVENTS"
+	defaultNATSSubject             = "network-broker.events"
+	defaultBatchSize               = 100
+	defaultMaxAttempts             = 10
+	defaultLease                   = 30 * time.Second
+	defaultPollInterval            = 250 * time.Millisecond
+	defaultFailureDelay            = 2 * time.Second
+	defaultReconciliationBatchSize = 100
+	defaultReconciliationPoll      = 5 * time.Second
+	defaultReconciliationFailure   = 5 * time.Second
 )
 
 type config struct {
-	DatabaseURL               string
-	ListenAddress             string
-	ApplyMigrations           bool
-	NATSURL                   string
-	NATSStream                string
-	NATSSubject               string
-	NATSCredentials           string
-	NATSCAFile                string
-	NATSCertFile              string
-	NATSKeyFile               string
-	OutboxWorkerID            string
-	ServerTLSCertFile         string
-	ServerTLSKeyFile          string
-	OperatorClientCAFile      string
-	OperatorSPIFFETrustDomain string
+	DatabaseURL                string
+	ListenAddress              string
+	ApplyMigrations            bool
+	NATSURL                    string
+	NATSStream                 string
+	NATSSubject                string
+	NATSCredentials            string
+	NATSCAFile                 string
+	NATSCertFile               string
+	NATSKeyFile                string
+	OutboxWorkerID             string
+	ServerTLSCertFile          string
+	ServerTLSKeyFile           string
+	OperatorClientCAFile       string
+	OperatorSPIFFETrustDomain  string
+	ReconciliationBatchSize    int
+	ReconciliationPoll         time.Duration
+	ReconciliationFailureDelay time.Duration
 }
 
 type application struct {
-	database    *sql.DB
-	resolutions *resolution.PostgresRepository
-	outbox      *outbox.PostgresStore
-	nats        *nats.Conn
-	metrics     *outbox.Metrics
-	deadLetters *deadLetterAPI
+	database              *sql.DB
+	resolutions           *resolution.PostgresRepository
+	outbox                *outbox.PostgresStore
+	nats                  *nats.Conn
+	metrics               *outbox.Metrics
+	deadLetters           *deadLetterAPI
+	reconciliation        *collector.PostgresRepository
+	reconciliationMetrics *collector.ReconciliationMetrics
 }
 
 type deliveryRuntime struct {
 	connection *nats.Conn
 	runner     outbox.Runner
 	metrics    *outbox.Metrics
+}
+
+type reconciliationRuntime struct {
+	repository *collector.PostgresRepository
+	runner     collector.ReconciliationRunner
+	metrics    *collector.ReconciliationMetrics
 }
 
 func main() {
@@ -114,6 +129,11 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		logger.Error("outbox repository bootstrap failed", "error", err)
 		return 1
 	}
+	reconciliation, err := newReconciliationRuntime(configuration, database, logger)
+	if err != nil {
+		logger.Error("evidence reconciliation bootstrap failed", "error", err)
+		return 1
+	}
 	delivery, err := newDeliveryRuntime(configuration, outboxStore, logger)
 	if err != nil {
 		logger.Error("event broker bootstrap failed", "error", err)
@@ -132,6 +152,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	app := &application{
 		database: database, resolutions: resolutionRepository, outbox: outboxStore,
 		nats: delivery.connection, metrics: delivery.metrics, deadLetters: deadLetterAPI,
+		reconciliation: reconciliation.repository, reconciliationMetrics: reconciliation.metrics,
 	}
 	server := &http.Server{
 		Addr:              configuration.ListenAddress,
@@ -145,7 +166,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	}
 	logger.Info("control plane starting", "listen_address", configuration.ListenAddress,
 		"operator_api_enabled", deadLetterAPI != nil)
-	if err := serve(ctx, server, delivery.runner); err != nil {
+	if err := serve(ctx, server, delivery.runner, reconciliation.runner); err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 			logger.Info("control plane stopped")
 			return 0
@@ -156,6 +177,27 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	logger.Info("control plane stopped")
 
 	return 0
+}
+
+func newReconciliationRuntime(configuration config, database *sql.DB,
+	logger *slog.Logger,
+) (*reconciliationRuntime, error) {
+	repository, err := collector.NewPostgresRepository(database)
+	if err != nil {
+		return nil, err
+	}
+	metrics := &collector.ReconciliationMetrics{}
+	runner := collector.ReconciliationRunner{
+		Repository: repository, BatchSize: configuration.ReconciliationBatchSize,
+		PollInterval: configuration.ReconciliationPoll,
+		FailureDelay: configuration.ReconciliationFailureDelay,
+		Now:          time.Now, Metrics: metrics,
+		OnError: func(reconciliationErr error) {
+			logger.Error("evidence reconciliation failed", "error", reconciliationErr)
+		},
+	}
+
+	return &reconciliationRuntime{repository: repository, runner: runner, metrics: metrics}, nil
 }
 
 func newOperatorRuntime(configuration config, database *sql.DB, logger *slog.Logger) (*deadLetterAPI, *tls.Config, error) {
@@ -225,20 +267,23 @@ func loadConfig(getenv func(string) string) (config, error) {
 		return config{}, fmt.Errorf("environment reader is required")
 	}
 	configuration := config{
-		DatabaseURL:               getenv("DATABASE_URL"),
-		ListenAddress:             getenv("LISTEN_ADDRESS"),
-		NATSURL:                   getenv("NATS_URL"),
-		NATSStream:                getenv("NATS_STREAM"),
-		NATSSubject:               getenv("NATS_SUBJECT"),
-		NATSCredentials:           getenv("NATS_CREDENTIALS_FILE"),
-		NATSCAFile:                getenv("NATS_CA_FILE"),
-		NATSCertFile:              getenv("NATS_CERT_FILE"),
-		NATSKeyFile:               getenv("NATS_KEY_FILE"),
-		OutboxWorkerID:            getenv("OUTBOX_WORKER_ID"),
-		ServerTLSCertFile:         getenv("SERVER_TLS_CERT_FILE"),
-		ServerTLSKeyFile:          getenv("SERVER_TLS_KEY_FILE"),
-		OperatorClientCAFile:      getenv("OPERATOR_CLIENT_CA_FILE"),
-		OperatorSPIFFETrustDomain: getenv("OPERATOR_SPIFFE_TRUST_DOMAIN"),
+		DatabaseURL:                getenv("DATABASE_URL"),
+		ListenAddress:              getenv("LISTEN_ADDRESS"),
+		NATSURL:                    getenv("NATS_URL"),
+		NATSStream:                 getenv("NATS_STREAM"),
+		NATSSubject:                getenv("NATS_SUBJECT"),
+		NATSCredentials:            getenv("NATS_CREDENTIALS_FILE"),
+		NATSCAFile:                 getenv("NATS_CA_FILE"),
+		NATSCertFile:               getenv("NATS_CERT_FILE"),
+		NATSKeyFile:                getenv("NATS_KEY_FILE"),
+		OutboxWorkerID:             getenv("OUTBOX_WORKER_ID"),
+		ServerTLSCertFile:          getenv("SERVER_TLS_CERT_FILE"),
+		ServerTLSKeyFile:           getenv("SERVER_TLS_KEY_FILE"),
+		OperatorClientCAFile:       getenv("OPERATOR_CLIENT_CA_FILE"),
+		OperatorSPIFFETrustDomain:  getenv("OPERATOR_SPIFFE_TRUST_DOMAIN"),
+		ReconciliationBatchSize:    defaultReconciliationBatchSize,
+		ReconciliationPoll:         defaultReconciliationPoll,
+		ReconciliationFailureDelay: defaultReconciliationFailure,
 	}
 	if configuration.DatabaseURL == "" {
 		return config{}, fmt.Errorf("DATABASE_URL is required")
@@ -281,8 +326,37 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 		configuration.ApplyMigrations = value
 	}
+	if err := loadReconciliationConfig(getenv, &configuration); err != nil {
+		return config{}, err
+	}
 
 	return configuration, nil
+}
+
+func loadReconciliationConfig(getenv func(string) string, configuration *config) error {
+	if raw := getenv("RECONCILIATION_BATCH_SIZE"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 || value > 10_000 {
+			return fmt.Errorf("RECONCILIATION_BATCH_SIZE must be between 1 and 10000")
+		}
+		configuration.ReconciliationBatchSize = value
+	}
+	if raw := getenv("RECONCILIATION_POLL_INTERVAL"); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return fmt.Errorf("RECONCILIATION_POLL_INTERVAL must be a positive duration")
+		}
+		configuration.ReconciliationPoll = value
+	}
+	if raw := getenv("RECONCILIATION_FAILURE_DELAY"); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return fmt.Errorf("RECONCILIATION_FAILURE_DELAY must be a positive duration")
+		}
+		configuration.ReconciliationFailureDelay = value
+	}
+
+	return nil
 }
 
 func openNATS(configuration config, logger *slog.Logger) (*nats.Conn, jetstream.JetStream, error) {
@@ -372,7 +446,7 @@ func (a *application) routes() http.Handler {
 
 func (a *application) readiness(response http.ResponseWriter, request *http.Request) {
 	if a == nil || a.database == nil || a.resolutions == nil || a.outbox == nil ||
-		a.nats == nil || a.nats.Status() != nats.CONNECTED {
+		a.reconciliation == nil || a.nats == nil || a.nats.Status() != nats.CONNECTED {
 		http.Error(response, "not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -421,9 +495,26 @@ func (a *application) metricsHandler(response http.ResponseWriter, _ *http.Reque
 		fmt.Fprintf(response, "network_broker_dead_letter_operator_denied_total %d\n",
 			a.deadLetters.metrics.denied.Load())
 	}
+	if a.reconciliationMetrics != nil {
+		snapshot := a.reconciliationMetrics.Snapshot()
+		fmt.Fprintf(response, "# HELP network_broker_evidence_reconciliation_candidates_total Expired evidence candidates inspected.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_evidence_reconciliation_candidates_total counter\n")
+		fmt.Fprintf(response, "network_broker_evidence_reconciliation_candidates_total %d\n", snapshot.Candidates)
+		fmt.Fprintf(response, "# HELP network_broker_evidence_reconciled_total Evidence envelopes accepted after collector process loss.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_evidence_reconciled_total counter\n")
+		fmt.Fprintf(response, "network_broker_evidence_reconciled_total %d\n", snapshot.Reconciled)
+		fmt.Fprintf(response, "# HELP network_broker_evidence_reconciliation_skipped_total Candidates fenced or otherwise no longer eligible.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_evidence_reconciliation_skipped_total counter\n")
+		fmt.Fprintf(response, "network_broker_evidence_reconciliation_skipped_total %d\n", snapshot.Skipped)
+		fmt.Fprintf(response, "# HELP network_broker_evidence_reconciliation_failures_total Reconciliation storage or integrity failures.\n")
+		fmt.Fprintf(response, "# TYPE network_broker_evidence_reconciliation_failures_total counter\n")
+		fmt.Fprintf(response, "network_broker_evidence_reconciliation_failures_total %d\n", snapshot.Failures)
+	}
 }
 
-func serve(ctx context.Context, server *http.Server, runner outbox.Runner) error {
+func serve(ctx context.Context, server *http.Server, outboxRunner outbox.Runner,
+	reconciliationRunner collector.ReconciliationRunner,
+) error {
 	group, serviceCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		var err error
@@ -438,7 +529,8 @@ func serve(ctx context.Context, server *http.Server, runner outbox.Runner) error
 
 		return err
 	})
-	group.Go(func() error { return runner.Run(serviceCtx) })
+	group.Go(func() error { return outboxRunner.Run(serviceCtx) })
+	group.Go(func() error { return reconciliationRunner.Run(serviceCtx) })
 	group.Go(func() error {
 		<-serviceCtx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(serviceCtx), shutdownTimeout)

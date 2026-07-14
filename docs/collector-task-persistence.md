@@ -25,4 +25,6 @@ POSTGRES_TEST_DSN='postgres://...' go test -tags integration ./test/integration 
 
 ## Remaining runtime work
 
-The control plane must create target tasks transactionally with resolution fan-out and its outbox event, and the collector executable must acquire tasks from this repository rather than constructing a local task. Database roles must prevent collectors from inserting tasks or bypassing guarded transitions. Evidence, disclosure and single-use execution-grant authority are now durable. Production wiring must use those repositories and schedule expired-evidence reconciliation with bounded scans, metrics and alerts.
+`CreateFanoutContext` now creates the complete task set, advances a planned resolution to queued and appends its outbox event in one transaction. A concurrent planner loses the locked resolution-version comparison and cannot leave partial or duplicate work. `collectorruntime.New` constructs workers with this PostgreSQL task authority and durable artefact/evidence repositories. The control plane schedules bounded expired-evidence reconciliation and exports its counters.
+
+The remaining integration work is for the network-facing planner to invoke this fan-out boundary and for a deployment entrypoint to supply qualified transport, policy, external credential-broker, S3, KMS and verified workload-identity dependencies. Database roles must prevent collectors from inserting tasks or bypassing guarded transitions.

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"network_broker/internal/collector"
 	"network_broker/internal/outbox"
 )
 
@@ -26,11 +27,34 @@ func TestLoadConfigRequiresDatabaseAndParsesOperationalSettings(t *testing.T) {
 	if configuration.DatabaseURL != values["DATABASE_URL"] ||
 		configuration.ListenAddress != values["LISTEN_ADDRESS"] || !configuration.ApplyMigrations ||
 		configuration.NATSURL != values["NATS_URL"] || configuration.OutboxWorkerID != values["OUTBOX_WORKER_ID"] ||
-		configuration.NATSStream != defaultNATSStream || configuration.NATSSubject != defaultNATSSubject {
+		configuration.NATSStream != defaultNATSStream || configuration.NATSSubject != defaultNATSSubject ||
+		configuration.ReconciliationBatchSize != defaultReconciliationBatchSize ||
+		configuration.ReconciliationPoll != defaultReconciliationPoll ||
+		configuration.ReconciliationFailureDelay != defaultReconciliationFailure {
 		t.Fatalf("unexpected configuration: %+v", configuration)
 	}
 	if _, err := loadConfig(func(string) string { return "" }); err == nil {
 		t.Fatal("expected missing database URL to fail")
+	}
+}
+
+func TestLoadConfigValidatesReconciliationBounds(t *testing.T) {
+	values := map[string]string{
+		"DATABASE_URL": "postgres://localhost/broker", "NATS_URL": "nats://localhost:4222",
+		"OUTBOX_WORKER_ID": "worker-a", "RECONCILIATION_BATCH_SIZE": "25",
+		"RECONCILIATION_POLL_INTERVAL": "2s", "RECONCILIATION_FAILURE_DELAY": "3s",
+	}
+	configuration, err := loadConfig(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.ReconciliationBatchSize != 25 || configuration.ReconciliationPoll != 2*time.Second ||
+		configuration.ReconciliationFailureDelay != 3*time.Second {
+		t.Fatalf("unexpected reconciliation configuration: %+v", configuration)
+	}
+	values["RECONCILIATION_BATCH_SIZE"] = "10001"
+	if _, err := loadConfig(func(key string) string { return values[key] }); err == nil {
+		t.Fatal("expected oversized reconciliation batch to fail")
 	}
 }
 
@@ -87,6 +111,19 @@ func TestMetricsEndpointExposesOutboxCounters(t *testing.T) {
 	(&application{metrics: &outbox.Metrics{}}).routes().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "network_broker_outbox_published_total 0") {
 		t.Fatalf("unexpected metrics response: status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestMetricsEndpointExposesReconciliationCounters(t *testing.T) {
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", http.NoBody)
+	response := httptest.NewRecorder()
+	app := &application{
+		metrics: &outbox.Metrics{}, reconciliationMetrics: &collector.ReconciliationMetrics{},
+	}
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(),
+		"network_broker_evidence_reconciled_total 0") {
+		t.Fatalf("unexpected reconciliation metrics: status=%d body=%q", response.Code, response.Body.String())
 	}
 }
 
