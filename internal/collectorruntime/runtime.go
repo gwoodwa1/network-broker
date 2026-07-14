@@ -32,7 +32,7 @@ type Config struct {
 	MaximumDuration   time.Duration
 	MaximumBytes      int64
 	EvidenceValidity  time.Duration
-	Sanitiser         sanitise.Pipeline
+	Sanitiser         sanitise.Transformer
 	Parser            parsing.InterfaceStateParser
 }
 
@@ -162,6 +162,7 @@ func validateIdentity(identity authctx.AuthContext) error {
 func validateRuntimeBounds(configuration Config) error {
 	if configuration.TransportName == "" || configuration.CollectorVersion == "" ||
 		configuration.AssemblerVersion == "" || configuration.NormaliserVersion == "" ||
+		configuration.Sanitiser == nil || configuration.Parser.ID == "" || configuration.Parser.Version == "" ||
 		configuration.LeaseDuration <= 0 || configuration.GrantTTL <= 0 ||
 		configuration.MaximumDuration <= 0 || configuration.MaximumBytes <= 0 ||
 		configuration.EvidenceValidity <= 0 {

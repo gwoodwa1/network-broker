@@ -330,17 +330,23 @@ func loadConfig(getenv func(string) string) (config, error) {
 		ReconciliationPoll:         defaultReconciliationPoll,
 		ReconciliationFailureDelay: defaultReconciliationFailure,
 	}
-	if configuration.DatabaseURL == "" {
-		return config{}, fmt.Errorf("DATABASE_URL is required")
+	applyConfigDefaults(&configuration)
+	if err := validateRequiredConfig(configuration); err != nil {
+		return config{}, err
 	}
-	if err := databaseauth.ValidateName(configuration.DatabaseRole); err != nil {
-		return config{}, fmt.Errorf("DATABASE_ROLE is required and invalid: %w", err)
+	if err := loadMigrationConfig(getenv, &configuration); err != nil {
+		return config{}, err
 	}
+	if err := loadReconciliationConfig(getenv, &configuration); err != nil {
+		return config{}, err
+	}
+
+	return configuration, nil
+}
+
+func applyConfigDefaults(configuration *config) {
 	if configuration.ListenAddress == "" {
 		configuration.ListenAddress = defaultListenAddress
-	}
-	if configuration.NATSURL == "" {
-		return config{}, fmt.Errorf("NATS_URL is required")
 	}
 	if configuration.NATSStream == "" {
 		configuration.NATSStream = defaultNATSStream
@@ -348,11 +354,23 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if configuration.NATSSubject == "" {
 		configuration.NATSSubject = defaultNATSSubject
 	}
+}
+
+func validateRequiredConfig(configuration config) error {
+	if configuration.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if err := databaseauth.ValidateName(configuration.DatabaseRole); err != nil {
+		return fmt.Errorf("DATABASE_ROLE is required and invalid: %w", err)
+	}
+	if configuration.NATSURL == "" {
+		return fmt.Errorf("NATS_URL is required")
+	}
 	if configuration.OutboxWorkerID == "" {
-		return config{}, fmt.Errorf("OUTBOX_WORKER_ID is required")
+		return fmt.Errorf("OUTBOX_WORKER_ID is required")
 	}
 	if (configuration.NATSCertFile == "") != (configuration.NATSKeyFile == "") {
-		return config{}, fmt.Errorf("NATS_CERT_FILE and NATS_KEY_FILE must be configured together")
+		return fmt.Errorf("NATS_CERT_FILE and NATS_KEY_FILE must be configured together")
 	}
 	operatorTLSValues := []string{
 		configuration.ServerTLSCertFile, configuration.ServerTLSKeyFile,
@@ -365,29 +383,31 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 	}
 	if configuredOperatorTLSValues != 0 && configuredOperatorTLSValues != len(operatorTLSValues) {
-		return config{}, fmt.Errorf("server TLS identity, operator client CA and SPIFFE trust domain must be configured together")
+		return fmt.Errorf("server TLS identity, operator client CA and SPIFFE trust domain must be configured together")
 	}
+
+	return nil
+}
+
+func loadMigrationConfig(getenv func(string) string, configuration *config) error {
 	if raw := getenv("APPLY_MIGRATIONS"); raw != "" {
 		value, err := strconv.ParseBool(raw)
 		if err != nil {
-			return config{}, fmt.Errorf("APPLY_MIGRATIONS must be a boolean: %w", err)
+			return fmt.Errorf("APPLY_MIGRATIONS must be a boolean: %w", err)
 		}
 		configuration.ApplyMigrations = value
 	}
 	if configuration.ApplyMigrations && configuration.MigrationDatabaseURL == "" {
-		return config{}, fmt.Errorf("MIGRATION_DATABASE_URL is required when APPLY_MIGRATIONS is true")
+		return fmt.Errorf("MIGRATION_DATABASE_URL is required when APPLY_MIGRATIONS is true")
 	}
 	if !configuration.ApplyMigrations && configuration.MigrationDatabaseURL != "" {
-		return config{}, fmt.Errorf("MIGRATION_DATABASE_URL requires APPLY_MIGRATIONS=true")
+		return fmt.Errorf("MIGRATION_DATABASE_URL requires APPLY_MIGRATIONS=true")
 	}
 	if configuration.ApplyMigrations && configuration.MigrationDatabaseURL == configuration.DatabaseURL {
-		return config{}, fmt.Errorf("migration and runtime database identities must be separate")
-	}
-	if err := loadReconciliationConfig(getenv, &configuration); err != nil {
-		return config{}, err
+		return fmt.Errorf("migration and runtime database identities must be separate")
 	}
 
-	return configuration, nil
+	return nil
 }
 
 func loadReconciliationConfig(getenv func(string) string, configuration *config) error {

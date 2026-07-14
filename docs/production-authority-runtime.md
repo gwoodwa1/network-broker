@@ -11,11 +11,18 @@ The production runtime must not silently replace durable authority with process-
 - immutable blob storage;
 - opaque signing and tenant encryption providers;
 - a qualified bounded transport adapter;
+- a recipe-specific hostile-output transformer producing the strict parser schema;
 - execution-time policy authorization;
 - signed execution-grant issuance; and
 - credential-broker exchange.
 
 The constructor creates no signing key and has no memory-store fallback. Before acquiring a task, `Runtime.Run` checks that its tenant matches the authenticated workload tenant. The deployment entrypoint remains responsible for deriving `AuthContext` from a verified SVID and constructing qualified S3, KMS, policy, transport and external credential-broker adapters.
+
+For the first gNMI interface-state recipe, `normalise.GNMIInterfaceState`
+closes the protocol/schema boundary: captured protobuf JSON remains immutable,
+while only one bounded, sanitised and manifest-bound OpenConfig
+`name`/`oper-status` response can reach the strict parser. This is a required
+composition dependency, not evidence of vendor qualification.
 
 ## Transactional task fan-out
 

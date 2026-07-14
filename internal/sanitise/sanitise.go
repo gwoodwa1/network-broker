@@ -55,6 +55,14 @@ type Pipeline struct {
 	Rules        Rules
 }
 
+// Transformer is the bounded captured-to-sanitised boundary used by the
+// evidence pipeline. Recipe-specific implementations may combine hostile-data
+// inspection with deterministic schema normalisation while preserving one
+// digest-bound transformation manifest.
+type Transformer interface {
+	Transform([]byte) ([]byte, artefacts.TransformationManifest, error)
+}
+
 func DefaultRules() Rules {
 	return Rules{
 		Version: defaultRulesVersion,

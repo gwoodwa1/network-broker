@@ -52,6 +52,14 @@ rendered structures cannot be promoted as an interface name even when the saniti
 as tainted data. gNMI, NETCONF and SSH captures preserve their actual JSON, XML or text media types; a parser
 cannot silently relabel an unsupported representation.
 
+The gNMI interface-state profile also covers the protocol-to-schema boundary.
+It preserves the raw protobuf JSON as captured evidence, inspects the complete
+response for hostile strings, strictly allowlists one OpenConfig interface
+`name`/`oper-status` response and emits the canonical interface-state schema.
+One combined manifest binds the original response digest directly to that
+derivative and maps device-controlled name taint to `$/interface_name`. See the
+[gNMI interface-state normalisation profile](gnmi-interface-state-profile.md).
+
 Disclosure policy denies tainted fields by default. An actor-specific decision must explicitly allow them;
 when it does, the signed receipt carries the delivered taint paths, a mandatory consumer warning and a
 human-readable sanitisation summary. Clean deliveries also carry a signed summary stating that no tainted

@@ -20,7 +20,7 @@ import (
 // artefact store; the envelope contains immutable references only.
 type PipelineSink struct {
 	Artefacts         artefacts.PipelineStore
-	Sanitiser         sanitise.Pipeline
+	Sanitiser         sanitise.Transformer
 	Parser            parsing.InterfaceStateParser
 	Assembler         *Assembler
 	TransportName     string
@@ -32,7 +32,11 @@ type PipelineSink struct {
 	Envelopes         Repository
 }
 
-func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Pipeline, parser parsing.InterfaceStateParser,
+type normaliserVersioner interface {
+	NormaliserVersion() string
+}
+
+func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Transformer, parser parsing.InterfaceStateParser,
 	assembler *Assembler, transportName, encryptionKeyRef, collectorVersion, normaliserVersion string,
 	validity time.Duration, now func() time.Time,
 ) (*PipelineSink, error) {
@@ -45,7 +49,7 @@ func NewPipelineSink(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
 		normaliserVersion, validity, now)
 }
 
-func NewPipelineSinkWithKeyProvider(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
+func NewPipelineSinkWithKeyProvider(store artefacts.PipelineStore, sanitiser sanitise.Transformer,
 	parser parsing.InterfaceStateParser, assembler *Assembler, transportName string,
 	encryptionKeys keyprovider.EncryptionProvider, collectorVersion, normaliserVersion string,
 	validity time.Duration, now func() time.Time,
@@ -56,14 +60,18 @@ func NewPipelineSinkWithKeyProvider(store artefacts.PipelineStore, sanitiser san
 
 // NewPipelineSinkWithRepositories constructs a pipeline with durable key and
 // immutable envelope persistence boundaries.
-func NewPipelineSinkWithRepositories(store artefacts.PipelineStore, sanitiser sanitise.Pipeline,
+func NewPipelineSinkWithRepositories(store artefacts.PipelineStore, sanitiser sanitise.Transformer,
 	parser parsing.InterfaceStateParser, assembler *Assembler, transportName string,
 	encryptionKeys keyprovider.EncryptionProvider, envelopes Repository,
 	collectorVersion, normaliserVersion string, validity time.Duration, now func() time.Time,
 ) (*PipelineSink, error) {
-	if store == nil || assembler == nil || transportName == "" || encryptionKeys == nil || collectorVersion == "" ||
+	if store == nil || sanitiser == nil || assembler == nil || transportName == "" || encryptionKeys == nil || collectorVersion == "" ||
 		envelopes == nil || normaliserVersion == "" || validity <= 0 {
 		return nil, fmt.Errorf("pipeline stores, identities, versions and positive validity are required")
+	}
+	if versioned, ok := sanitiser.(normaliserVersioner); ok &&
+		versioned.NormaliserVersion() != normaliserVersion {
+		return nil, fmt.Errorf("pipeline normaliser version does not match transformer identity")
 	}
 	if now == nil {
 		now = time.Now

@@ -11,9 +11,13 @@ import (
 	"network_broker/internal/artefacts"
 	"network_broker/internal/collector"
 	"network_broker/internal/keyprovider"
+	"network_broker/internal/normalise"
 	"network_broker/internal/parsing"
 	"network_broker/internal/sanitise"
 	"network_broker/internal/transport"
+
+	gpb "github.com/openconfig/gnmi/proto/gnmi"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type recordingPipelineStore struct {
@@ -161,5 +165,117 @@ func TestPipelineSinkPersistsQuarantineLineageWithoutSigningEvidence(t *testing.
 	envelopes, ok := sink.Envelopes.(*MemoryRepository)
 	if !ok || len(envelopes.envelopes) != 0 {
 		t.Fatal("quarantined evidence was signed")
+	}
+}
+
+func TestPipelineSinkNormalisesCapturedGNMIResponseBeforeStrictParsing(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	tasks := collector.NewStore()
+	task := collector.Task{
+		ID: "task-gnmi", TenantID: "tenant-1", ClaimFingerprint: "claim-1", ResolutionID: "resolution-1",
+		TargetSnapshotID: "snapshot-1", TargetSnapshotHash: "snapshot-hash", TargetID: "target-1",
+		RecipeID: "gnmi_interface_get", RecipeVersion: "v1", TriggerDecisionID: "trigger-1",
+		PlanningDecisionID: "planning-1", CompatibilityHash: "compat-1",
+	}
+	if err := tasks.Add(task); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := tasks.Acquire(task.ID, "collector-a", now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.StartExecution(task.ID, lease.Owner, lease.FencingToken, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.RecordExecutionAuthority(task.ID, lease.Owner, lease.FencingToken,
+		"execution-1", "grant-1", now); err != nil {
+		t.Fatal(err)
+	}
+	task, err = tasks.Get(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembler, err := NewAssembler("v1", private, tasks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := sanitise.DefaultRules()
+	rules.FreeTextJSONFields = append(rules.FreeTextJSONFields, "name")
+	normaliser, err := normalise.NewGNMIInterfaceState("gnmi-interface-state", "gnmi-interface-state/v1", sanitise.Pipeline{
+		ID: "gnmi-hostile-output", Version: "v1", MaximumBytes: 4096, Rules: rules,
+	}, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewPipelineSink(artefacts.NewStore(), normaliser,
+		parsing.InterfaceStateParser{ID: "interface-state", Version: "v1"}, assembler, "gnmi",
+		"kms://evidence/tenant-1/v1", "collector-v1", "gnmi-interface-state/v1",
+		5*time.Minute, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := &gpb.GetResponse{Notification: []*gpb.Notification{{
+		Timestamp: now.UnixNano(), Update: []*gpb.Update{{
+			Path: &gpb.Path{Elem: []*gpb.PathElem{
+				{Name: "interfaces"},
+				{Name: "interface", Key: map[string]string{"name": "Ethernet1"}},
+				{Name: "state"},
+				{Name: "oper-status"},
+			}},
+			Val: &gpb.TypedValue{Value: &gpb.TypedValue_StringVal{StringVal: "UP"}},
+		}},
+	}}}
+	payload, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, evidenceID, err := sink.WriteCaptured(context.Background(), task, lease, transport.CapturedBytes{
+		TargetID: task.TargetID, Payload: payload, Digest: sha256.Sum256(payload),
+		MediaType: "application/json", CapturedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := sink.Get(evidenceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.InterfaceState.InterfaceName != "Ethernet1" ||
+		envelope.InterfaceState.OperationalState != "up" ||
+		envelope.NormaliserVersion != "gnmi-interface-state/v1" ||
+		envelope.Captured.SHA256Digest == envelope.Sanitised.SHA256Digest {
+		t.Fatalf("captured gNMI response was not normalised with distinct lineage: %+v", envelope)
+	}
+	if err := assembler.Verify(envelope); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPipelineSinkRejectsMismatchedTransformerVersion(t *testing.T) {
+	rules := sanitise.DefaultRules()
+	rules.FreeTextJSONFields = append(rules.FreeTextJSONFields, "name")
+	normaliser, err := normalise.NewGNMIInterfaceState("gnmi-interface-state", "v2", sanitise.Pipeline{
+		ID: "gnmi-hostile-output", Version: "v1", MaximumBytes: 4096, Rules: rules,
+	}, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembler, err := NewAssembler("v1", private, collector.NewStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewPipelineSink(artefacts.NewStore(), normaliser,
+		parsing.InterfaceStateParser{ID: "interface-state", Version: "v1"}, assembler, "gnmi",
+		"kms://evidence/tenant-1/v1", "collector-v1", "v1", 5*time.Minute, time.Now)
+	if err == nil {
+		t.Fatal("expected mismatched normaliser version to fail construction")
 	}
 }

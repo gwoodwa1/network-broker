@@ -4,7 +4,7 @@ Production transport adapters implement the same narrow `transport.Adapter` cont
 
 ## gNMI
 
-`GNMIAdapter` resolves only server-owned protobuf paths. `GRPCGNMIDialer` requires TLS 1.3, explicit trust roots, hostname verification, per-RPC credentials and a maximum gRPC receive size. Responses are encoded deterministically as protobuf JSON and checked again against the policy byte limit.
+`GNMIAdapter` resolves only server-owned protobuf paths. `GRPCGNMIDialer` requires TLS 1.3, explicit trust roots, hostname verification, per-RPC credentials and a maximum gRPC receive size. Responses are encoded deterministically as protobuf JSON and checked again against the policy byte limit. The first interface-state profile preserves that response as captured evidence, applies hostile-output inspection and accepts only one bounded OpenConfig interface `name`/`oper-status` shape before emitting the canonical parser schema. See the [gNMI interface-state normalisation profile](gnmi-interface-state-profile.md).
 
 ## NETCONF
 

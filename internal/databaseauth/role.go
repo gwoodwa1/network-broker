@@ -109,7 +109,7 @@ func VerifyControlPlane(ctx context.Context, database *sql.DB, expected string) 
 	return role, nil
 }
 
-func inspectTableGrants(ctx context.Context, database *sql.DB) ([]objectGrant, error) {
+func inspectTableGrants(ctx context.Context, database *sql.DB) (grants []objectGrant, err error) {
 	rows, err := database.QueryContext(ctx, `
 		SELECT relation.relname,
 			has_table_privilege(current_user, relation.oid, 'SELECT'),
@@ -128,9 +128,12 @@ func inspectTableGrants(ctx context.Context, database *sql.DB) ([]objectGrant, e
 	if err != nil {
 		return nil, fmt.Errorf("inspect PostgreSQL table privileges: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close PostgreSQL table privileges: %w", closeErr))
+		}
+	}()
 
-	var grants []objectGrant
 	for rows.Next() {
 		grant := objectGrant{Privileges: make(map[string]bool, 7)}
 		var selectPrivilege, insertPrivilege, updatePrivilege, deletePrivilege bool
@@ -155,7 +158,7 @@ func inspectTableGrants(ctx context.Context, database *sql.DB) ([]objectGrant, e
 	return grants, nil
 }
 
-func inspectSequenceGrants(ctx context.Context, database *sql.DB) ([]objectGrant, error) {
+func inspectSequenceGrants(ctx context.Context, database *sql.DB) (grants []objectGrant, err error) {
 	rows, err := database.QueryContext(ctx, `
 		SELECT relation.relname,
 			has_sequence_privilege(current_user, relation.oid, 'USAGE'),
@@ -169,9 +172,12 @@ func inspectSequenceGrants(ctx context.Context, database *sql.DB) ([]objectGrant
 	if err != nil {
 		return nil, fmt.Errorf("inspect PostgreSQL sequence privileges: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close PostgreSQL sequence privileges: %w", closeErr))
+		}
+	}()
 
-	var grants []objectGrant
 	for rows.Next() {
 		grant := objectGrant{Privileges: make(map[string]bool, 3)}
 		var usagePrivilege, selectPrivilege, updatePrivilege bool
@@ -191,9 +197,9 @@ func inspectSequenceGrants(ctx context.Context, database *sql.DB) ([]objectGrant
 }
 
 func validateObjectGrants(kind string, actual []objectGrant, expected map[string]map[string]bool) error {
-	seen := make(map[string]bool, len(actual))
+	byName := make(map[string]objectGrant, len(actual))
 	for _, grant := range actual {
-		seen[grant.Name] = true
+		byName[grant.Name] = grant
 		allowed := expected[grant.Name]
 		for privilege, present := range grant.Privileges {
 			if present && !allowed[privilege] {
@@ -202,18 +208,12 @@ func validateObjectGrants(kind string, actual []objectGrant, expected map[string
 		}
 	}
 	for name, privileges := range expected {
-		if !seen[name] {
+		grant, found := byName[name]
+		if !found {
 			return fmt.Errorf("required PostgreSQL %s %q was not found", kind, name)
 		}
 		for privilege := range privileges {
-			found := false
-			for _, grant := range actual {
-				if grant.Name == name {
-					found = grant.Privileges[privilege]
-					break
-				}
-			}
-			if !found {
+			if !grant.Privileges[privilege] {
 				return fmt.Errorf("PostgreSQL %s %q lacks required %s privilege", kind, name, privilege)
 			}
 		}
@@ -227,8 +227,8 @@ func validateObjectGrants(kind string, actual []objectGrant, expected map[string
 func ValidateName(name string) error {
 	if name == "" || len(name) > maximumRoleNameBytes || strings.TrimSpace(name) != name ||
 		strings.IndexFunc(name, func(character rune) bool {
-			return !(unicode.IsLetter(character) || unicode.IsDigit(character) ||
-				character == '_' || character == '-')
+			return !unicode.IsLetter(character) && !unicode.IsDigit(character) &&
+				character != '_' && character != '-'
 		}) >= 0 {
 		return fmt.Errorf("expected PostgreSQL role must be a canonical deployment identifier")
 	}
