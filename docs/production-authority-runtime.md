@@ -42,6 +42,25 @@ The request uses schema version `v1`, is limited to 512 KiB and 1,000 tasks, rej
 
 The planner is an authority-bearing internal workload. It must submit only catalogue-derived recipes and persisted trigger/planning decision identifiers. Database-role enforcement and direct foreign-key validation of those provenance bindings remain part of the supported deployment hardening gate.
 
+## Authenticated resolution status
+
+The control plane exposes `GET /v1/resolutions/{resolution_id}` when its mTLS
+configuration is enabled. A verified SPIFFE identity with the `agent` role
+receives the narrow `resolutions:read` scope. The handler derives tenant
+authority exclusively from that identity and performs a tenant-and-ID bound
+repository lookup.
+
+The v1 response contains only workflow state, target count, completion flag,
+version and timestamps. It excludes tenant, originating actor, idempotency key
+and request digest, is marked `no-store`, and cannot trigger collection or
+release evidence. Missing and cross-tenant identifiers return the same 404
+code. Authentication and scope checks precede identifier validation and
+repository access. See the [resolution status API contract](resolution-status-api.md).
+
+This is the first external read slice, not completion of the northbound API.
+Resolution creation/watch, QueryContext, evidence retrieval, per-tenant rate
+limits and deployment-level side-channel qualification remain open.
+
 ## Reconciliation scheduling
 
 The control plane always constructs `ReconciliationRunner`. It lists a bounded, deterministic batch of expired tasks whose indexed evidence bindings still match, then invokes the guarded acceptance update. A task can be accepted only if tenant, task, fence and execution-grant authority are unchanged at update time.

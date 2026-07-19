@@ -8,6 +8,7 @@ This document defines deployment requirements. Passing unit tests does not make 
 - Accept SPIFFE identities only from configured trust domains and exact role bindings. Do not copy tenant or role values from headers, request bodies or unverified certificate fields.
 - Automate workload certificate issuance, short expiry, rotation and revocation through SPIRE or an equivalent system.
 - Separate gateway, collector, migration, policy-administration and lifecycle-worker identities and database roles.
+- Preserve indistinguishable not-found behavior for tenant-scoped resolution reads, and add per-actor and per-tenant admission limits in front of the process-wide concurrency bound.
 - Store device TLS roots and SSH known-host data as reviewed, versioned deployment configuration. Never enable `InsecureSkipVerify`, `ssh.InsecureIgnoreHostKey`, trust-on-first-use or plaintext protocol fallback.
 
 ## Key custody

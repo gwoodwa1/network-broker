@@ -6,7 +6,8 @@ This package is the entry point for an independent reviewer. Repository maintain
 
 Prioritise these components:
 
-1. SPIFFE/mTLS derivation in `internal/workloadidentity` and operator route wiring.
+1. SPIFFE/mTLS derivation in `internal/workloadidentity`, resolution-status,
+   planning and operator route wiring.
 2. KMS alias resolution, signature construction and historical verification in `internal/keyprovider`.
 3. Policy bundle signing, activation, decision provenance and approval consumption.
 4. Lease/fencing and exactly-one accepted-result state transitions.
@@ -22,6 +23,8 @@ Prioritise these components:
 - Can alias rotation, key disablement or deletion make historical evidence unverifiable without detection?
 - Can a malicious device bypass response limits, hold resources after cancellation or inject trusted parser output?
 - Can one tenant infer another tenant's artefact, approval, policy decision or dead-letter data?
+- Does resolution-status authentication, response shaping, error behavior or
+  timing expose cross-tenant workflow existence or internal authority fields?
 - Can a database, object-store or queue partial failure produce accepted evidence without complete provenance?
 - Are logs, metrics, traces, errors or crash dumps capable of exposing credentials or captured bytes?
 

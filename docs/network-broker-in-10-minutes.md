@@ -252,6 +252,7 @@ tests, `gosec` and `govulncheck`.
 - Strict interface-state normalisation and parsing.
 - Signed evidence envelopes and actor-bound delivery receipts.
 - Authenticated internal planning and dead-letter operator surfaces.
+- Authenticated, tenant-scoped resolution status reads.
 - Exact control-plane PostgreSQL role and object-grant verification.
 
 ### Still open before production use
@@ -259,7 +260,9 @@ tests, `gosec` and `govulncheck`.
 - A supported collector entrypoint composing PostgreSQL, S3, KMS, verified
   workload identity, production policy, an external credential broker and one
   qualified transport.
-- Versioned public resolution, watch, QueryContext and retrieval APIs.
+- Resolution creation/watch, QueryContext and evidence-retrieval APIs. A
+  versioned, authenticated and tenant-scoped resolution status read is available
+  at `GET /v1/resolutions/{resolution_id}`.
 - Vendor/network-OS release qualification.
 - A lifecycle deletion and orphan-reconciliation worker.
 - Production policy and approval administration.
