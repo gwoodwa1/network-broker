@@ -10,8 +10,8 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/openconfig/gnmi v0.14.1
 	golang.org/x/crypto v0.52.0
-	golang.org/x/sync v0.20.0
-	golang.org/x/text v0.37.0
+	golang.org/x/sync v0.22.0
+	golang.org/x/text v0.40.0
 	google.golang.org/grpc v1.69.2
 	google.golang.org/protobuf v1.36.2
 )
