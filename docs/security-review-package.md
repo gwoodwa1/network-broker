@@ -25,6 +25,9 @@ Prioritise these components:
 - Can one tenant infer another tenant's artefact, approval, policy decision or dead-letter data?
 - Does resolution-status authentication, response shaping, error behavior or
   timing expose cross-tenant workflow existence or internal authority fields?
+- Can resolution watch expose raw outbox payloads, global sequence gaps,
+  cross-tenant existence, duplicate/out-of-order versions or unbounded
+  connections through cursor and proxy behavior?
 - Can resolution creation be replayed under another actor/tenant, canonicalize
   two distinct meanings to one digest, omit provenance from the transactional
   event or exceed documented claim/target/request bounds?

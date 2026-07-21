@@ -1,6 +1,6 @@
 # Resolution status API
 
-The control plane exposes a first network-facing, read-only workflow endpoint:
+The control plane exposes a network-facing, read-only workflow endpoint:
 
 ```text
 GET /v1/resolutions/{resolution_id}
@@ -8,7 +8,8 @@ GET /v1/resolutions/{resolution_id}
 
 This endpoint reports durable resolution status without triggering collection
 or disclosing evidence. It complements the
-[resolution creation API](resolution-create-api.md). Resolution watch,
+[resolution creation API](resolution-create-api.md). Resumable events are
+available through the [resolution watch API](resolution-watch-api.md).
 QueryContext and retrieval surfaces remain open.
 
 ## Authentication and authority

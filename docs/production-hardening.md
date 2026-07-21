@@ -9,6 +9,7 @@ This document defines deployment requirements. Passing unit tests does not make 
 - Automate workload certificate issuance, short expiry, rotation and revocation through SPIRE or an equivalent system.
 - Separate gateway, collector, migration, policy-administration and lifecycle-worker identities and database roles.
 - Preserve indistinguishable not-found behavior for tenant-scoped resolution reads, and add per-actor and per-tenant admission limits in front of the process-wide concurrency bound.
+- Qualify resolution SSE through the deployed ingress: disable proxy buffering, bound connection counts and duration, drain cleanly during rollout and verify that version cursors and response timing do not reveal other tenant activity.
 - Consume only the canonical request document carried by the transactional resolution-creation event; verify its stored digest before planning and reject unsupported claim types through the active catalogue and policy bundle.
 - Store device TLS roots and SSH known-host data as reviewed, versioned deployment configuration. Never enable `InsecureSkipVerify`, `ssh.InsecureIgnoreHostKey`, trust-on-first-use or plaintext protocol fallback.
 

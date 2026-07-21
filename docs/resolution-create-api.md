@@ -95,8 +95,8 @@ header pointing at the status resource, `Cache-Control: no-store`, and:
 ```
 
 The response does not expose tenant, actor, request digest, canonical request or
-idempotency key. Poll the [resolution status API](resolution-status-api.md)
-using the returned location.
+idempotency key. Poll the [resolution status API](resolution-status-api.md) or
+connect to the [resolution watch API](resolution-watch-api.md).
 
 ## Errors
 

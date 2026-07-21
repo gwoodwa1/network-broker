@@ -77,9 +77,23 @@ release evidence. Missing and cross-tenant identifiers return the same 404
 code. Authentication and scope checks precede identifier validation and
 repository access. See the [resolution status API contract](resolution-status-api.md).
 
-Creation and status are bounded external slices, not completion of the
-northbound API. Resolution watch, QueryContext, evidence retrieval, per-tenant
-rate limits and deployment-level side-channel qualification remain open.
+## Authenticated resolution watch
+
+The control plane exposes a bounded SSE stream at
+`GET /v1/resolutions/{resolution_id}/events`. A verified `agent` identity must
+carry the route-specific `resolutions:watch` scope. Every existence and event
+query uses its derived tenant.
+
+The stream reads the durable transactional outbox but never proxies its raw
+payload. Only event type, resolution state, occurrence time and resolution
+version cross the boundary. The resolution version is the reconnect cursor;
+the global outbox sequence remains internal so cursor gaps cannot reveal other
+tenant activity. `Last-Event-ID` and `after` resume strictly after that version.
+See the [resolution watch API contract](resolution-watch-api.md).
+
+Creation, status and watch are bounded external slices, not completion of the
+northbound API. QueryContext, evidence retrieval, per-tenant rate limits and
+deployment-level proxy/side-channel qualification remain open.
 
 ## Reconciliation scheduling
 
@@ -99,6 +113,8 @@ The PostgreSQL integration suite proves:
 
 - canonical request bytes and their digest survive repository reconstruction
   and are present in the transactional creation event;
+- safe resolution events survive repository reconstruction without exposing
+  raw payloads or global outbox sequences;
 - two concurrent planners create one complete task set and one outbox event;
 - the concurrent planners enter through the authenticated, tenant-binding planning service;
 - a collector assembled exclusively from durable repository boundaries completes a task and its result survives reconstruction;

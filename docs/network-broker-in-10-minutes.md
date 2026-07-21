@@ -254,6 +254,7 @@ tests, `gosec` and `govulncheck`.
 - Authenticated internal planning and dead-letter operator surfaces.
 - Authenticated, canonical and idempotent resolution creation.
 - Authenticated, tenant-scoped resolution status reads.
+- Resumable, tenant-scoped resolution SSE using safe version cursors.
 - Exact control-plane PostgreSQL role and object-grant verification.
 
 ### Still open before production use
@@ -261,10 +262,10 @@ tests, `gosec` and `govulncheck`.
 - A supported collector entrypoint composing PostgreSQL, S3, KMS, verified
   workload identity, production policy, an external credential broker and one
   qualified transport.
-- Resolution watch, QueryContext and evidence-retrieval APIs. Versioned,
-  authenticated resolution creation and tenant-scoped status reads are
-  available at `POST /v1/resolutions` and
-  `GET /v1/resolutions/{resolution_id}`.
+- QueryContext and evidence-retrieval APIs. Versioned, authenticated resolution
+  creation, status and watch are available at `POST /v1/resolutions`,
+  `GET /v1/resolutions/{resolution_id}` and
+  `GET /v1/resolutions/{resolution_id}/events`.
 - Vendor/network-OS release qualification.
 - A lifecycle deletion and orphan-reconciliation worker.
 - Production policy and approval administration.

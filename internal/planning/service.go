@@ -14,6 +14,7 @@ import (
 	"network_broker/internal/authctx"
 	"network_broker/internal/collector"
 	"network_broker/internal/outbox"
+	"network_broker/internal/resolution"
 )
 
 const (
@@ -106,13 +107,15 @@ func (s *Service) Queue(ctx context.Context, actor authctx.AuthContext,
 		return QueueResult{}, fmt.Errorf("generate planning event id: %w", err)
 	}
 	eventPayload := struct {
-		SchemaVersion string `json:"schema_version"`
-		ResolutionID  string `json:"resolution_id"`
-		Version       int64  `json:"version"`
-		TaskCount     int    `json:"task_count"`
+		SchemaVersion string                     `json:"schema_version"`
+		ResolutionID  string                     `json:"resolution_id"`
+		State         resolution.ResolutionState `json:"state"`
+		Version       int64                      `json:"version"`
+		TaskCount     int                        `json:"task_count"`
 	}{
 		SchemaVersion: queueEventSchemaVersion,
 		ResolutionID:  request.ResolutionID,
+		State:         resolution.ResolutionQueued,
 		Version:       request.ExpectedResolutionVersion + 1,
 		TaskCount:     len(tasks),
 	}

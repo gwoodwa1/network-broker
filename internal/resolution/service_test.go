@@ -91,6 +91,53 @@ func TestServiceEnforcesTenantScope(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryListsSafeVersionCursorEvents(t *testing.T) {
+	repository := NewMemoryRepository()
+	service := testService(repository)
+	created, err := service.Create(context.Background(), validCreateRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Transition(context.Background(), TransitionRequest{
+		TenantID: created.Resolution.TenantID, ResolutionID: created.Resolution.ID,
+		ExpectedVersion: 1, NextState: ResolutionResolvingTargets,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := repository.ListEvents(context.Background(), created.Resolution.TenantID,
+		created.Resolution.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Cursor != 1 || events[0].State != ResolutionReceived ||
+		events[1].Cursor != 2 || events[1].State != ResolutionResolvingTargets {
+		t.Fatalf("unexpected safe event history: %+v", events)
+	}
+	after, err := repository.ListEvents(context.Background(), created.Resolution.TenantID,
+		created.Resolution.ID, 1, 10)
+	if err != nil || len(after) != 1 || after[0].Cursor != 2 {
+		t.Fatalf("unexpected cursor result: events=%+v error=%v", after, err)
+	}
+	if _, err := repository.ListEvents(context.Background(), "tenant-other",
+		created.Resolution.ID, 0, 10); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected tenant-scoped not found, got %v", err)
+	}
+}
+
+func TestMemoryRepositoryFailsClosedOnMalformedResolutionEvent(t *testing.T) {
+	repository := NewMemoryRepository()
+	service := testService(repository)
+	created, err := service.Create(context.Background(), validCreateRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.events[0].Payload = []byte(`{"schema_version":"v1","state":"received","version":"bad"}`)
+	if _, err := repository.ListEvents(context.Background(), created.Resolution.TenantID,
+		created.Resolution.ID, 0, 10); err == nil {
+		t.Fatal("expected malformed durable event to fail closed")
+	}
+}
+
 func TestServiceConcurrentIdempotentCreationProducesOneWorkflow(t *testing.T) {
 	repository := NewMemoryRepository()
 	service := testService(repository)

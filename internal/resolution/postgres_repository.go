@@ -114,6 +114,60 @@ func (r *PostgresRepository) Get(ctx context.Context, tenantID, resolutionID str
 	return resolution, nil
 }
 
+// ListEvents reads a bounded, tenant-scoped resolution history using the
+// resolution version as its externally visible cursor. Raw outbox payloads and
+// global sequences do not cross this boundary.
+func (r *PostgresRepository) ListEvents(ctx context.Context, tenantID, resolutionID string,
+	after int64, limit int,
+) (events []WatchEvent, err error) {
+	if r == nil || r.database == nil {
+		return nil, fmt.Errorf("resolution database is required")
+	}
+	if err := validateWatchRequest(tenantID, resolutionID, after, limit); err != nil {
+		return nil, err
+	}
+	if _, err := r.Get(ctx, tenantID, resolutionID); err != nil {
+		return nil, err
+	}
+	rows, err := r.database.QueryContext(ctx, `
+		SELECT event_type, payload, occurred_at
+		FROM broker_outbox
+		WHERE tenant_id = $1
+		  AND aggregate_type = 'resolution'
+		  AND aggregate_id = $2
+		  AND event_type IN ('resolution.received', 'resolution.state_changed', 'resolution.tasks_queued')
+		  AND (payload->>'version')::bigint > $3
+		ORDER BY (payload->>'version')::bigint
+		LIMIT $4`, tenantID, resolutionID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list resolution events: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close resolution event rows: %w", closeErr))
+		}
+	}()
+	for rows.Next() {
+		var event outbox.Event
+		event.TenantID = tenantID
+		event.AggregateType = "resolution"
+		event.AggregateID = resolutionID
+		if err := rows.Scan(&event.Type, &event.Payload, &event.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan resolution event: %w", err)
+		}
+		projected, err := safeWatchEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, projected)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate resolution events: %w", err)
+	}
+
+	return events, nil
+}
+
 // Transition performs a tenant-scoped compare-and-set update and writes its
 // event before committing the transaction.
 func (r *PostgresRepository) Transition(ctx context.Context, tenantID, resolutionID string, expectedVersion int64,

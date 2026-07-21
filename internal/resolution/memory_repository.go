@@ -79,6 +79,44 @@ func (r *MemoryRepository) Get(_ context.Context, tenantID, resolutionID string)
 	return cloneResolution(resolution), nil
 }
 
+// ListEvents returns a bounded tenant-scoped projection ordered by resolution
+// version. Internal event payload fields are never returned.
+func (r *MemoryRepository) ListEvents(_ context.Context, tenantID, resolutionID string,
+	after int64, limit int,
+) ([]WatchEvent, error) {
+	if r == nil {
+		return nil, fmt.Errorf("resolution repository is nil")
+	}
+	if err := validateWatchRequest(tenantID, resolutionID, after, limit); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if stored, exists := r.resolutions[resolutionID]; !exists || stored.TenantID != tenantID {
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, resolutionID)
+	}
+	events := make([]WatchEvent, 0, limit)
+	for _, event := range r.events {
+		if event.TenantID != tenantID || event.AggregateType != "resolution" ||
+			event.AggregateID != resolutionID {
+			continue
+		}
+		projected, err := safeWatchEvent(event)
+		if err != nil {
+			return nil, err
+		}
+		if projected.Cursor <= after {
+			continue
+		}
+		events = append(events, projected)
+		if len(events) == limit {
+			break
+		}
+	}
+
+	return events, nil
+}
+
 // Transition performs a compare-and-set update and outbox append atomically.
 func (r *MemoryRepository) Transition(_ context.Context, tenantID, resolutionID string, expectedVersion int64,
 	expectedState, next ResolutionState, updatedAt time.Time, event outbox.Event,

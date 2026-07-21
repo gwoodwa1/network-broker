@@ -58,4 +58,12 @@ func TestResolutionRequestProvenanceSurvivesRepositoryReconstruction(t *testing.
 		!strings.Contains(string(payload), created.Resolution.RequestDigest) {
 		t.Fatalf("creation event omitted request provenance: %s", payload)
 	}
+	events, err := restarted.ListEvents(ctx, "tenant-integration", created.Resolution.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Cursor != 1 || events[0].State != resolution.ResolutionReceived ||
+		events[0].Type != "resolution.received" {
+		t.Fatalf("unexpected safe durable event projection: %+v", events)
+	}
 }
