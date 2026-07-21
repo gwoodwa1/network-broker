@@ -79,6 +79,7 @@ type application struct {
 	metrics               *outbox.Metrics
 	deadLetters           *deadLetterAPI
 	planning              *planningAPI
+	resolutionCreate      *resolutionCreateAPI
 	resolutionStatus      *resolutionStatusAPI
 	reconciliation        *collector.PostgresRepository
 	reconciliationMetrics *collector.ReconciliationMetrics
@@ -168,6 +169,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	}
 	logger.Info("control plane starting", "listen_address", configuration.ListenAddress,
 		"operator_api_enabled", deadLetterAPI != nil, "planning_api_enabled", app.planning != nil,
+		"resolution_create_api_enabled", app.resolutionCreate != nil,
 		"resolution_status_api_enabled", app.resolutionStatus != nil)
 	if err := serve(ctx, server, delivery.runner, reconciliation.runner); err != nil {
 		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
@@ -197,12 +199,18 @@ func newApplication(configuration config, database *sql.DB,
 	if err != nil {
 		return nil, err
 	}
+	resolutionCreateAPI, err := newResolutionCreateRuntime(configuration,
+		resolutionRepository, serverTLS, logger)
+	if err != nil {
+		return nil, err
+	}
 
 	return &application{
 		database: database, resolutions: resolutionRepository, outbox: outboxStore,
 		nats: delivery.connection, metrics: delivery.metrics, deadLetters: deadLetters,
-		planning: planningAPI, resolutionStatus: resolutionStatusAPI,
-		reconciliation: reconciliation.repository, reconciliationMetrics: reconciliation.metrics,
+		planning: planningAPI, resolutionCreate: resolutionCreateAPI,
+		resolutionStatus: resolutionStatusAPI,
+		reconciliation:   reconciliation.repository, reconciliationMetrics: reconciliation.metrics,
 	}, nil
 }
 
@@ -246,6 +254,26 @@ func newResolutionStatusRuntime(configuration config, repository resolution.Repo
 	}
 
 	return newResolutionStatusAPI(repository, authenticator, logger)
+}
+
+func newResolutionCreateRuntime(configuration config, repository resolution.Repository,
+	serverTLS *tls.Config, logger *slog.Logger,
+) (*resolutionCreateAPI, error) {
+	if serverTLS == nil {
+		return nil, nil
+	}
+	service := resolution.NewServiceWithRepository(repository, time.Now, randomIdentifier)
+	authenticator := workloadidentity.Authenticator{
+		TrustDomain: configuration.OperatorSPIFFETrustDomain, Now: time.Now,
+		// #nosec G101 -- these values are authorization labels, not credentials.
+		Roles: map[string]workloadidentity.RoleBinding{
+			"agent": {
+				Scopes: []string{resolutionCreateScope}, CredentialClass: "mtls-spiffe",
+			},
+		},
+	}
+
+	return newResolutionCreateAPI(service, authenticator, logger)
 }
 
 func newReconciliationRuntime(configuration config, database *sql.DB,
@@ -580,6 +608,9 @@ func (a *application) routes() http.Handler {
 	}
 	if a != nil && a.resolutionStatus != nil {
 		a.resolutionStatus.register(mux)
+	}
+	if a != nil && a.resolutionCreate != nil {
+		a.resolutionCreate.register(mux)
 	}
 
 	return mux

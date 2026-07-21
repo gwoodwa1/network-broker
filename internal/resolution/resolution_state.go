@@ -50,17 +50,18 @@ var allowedTransitions = map[ResolutionState]map[ResolutionState]struct{}{
 
 // Resolution captures durable state for an evidence-resolution workflow.
 type Resolution struct {
-	ID             string
-	ActorID        string
-	TenantID       string
-	IdempotencyKey string
-	RequestDigest  string
-	State          ResolutionState
-	TargetCount    int
-	Completed      bool
-	Version        int64
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              string
+	ActorID         string
+	TenantID        string
+	IdempotencyKey  string
+	RequestDigest   string
+	RequestDocument []byte
+	State           ResolutionState
+	TargetCount     int
+	Completed       bool
+	Version         int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Terminal reports whether no further workflow transition is permitted.

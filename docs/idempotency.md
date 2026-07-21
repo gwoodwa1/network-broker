@@ -1,8 +1,9 @@
 # Resolution idempotency contract
 
-Resolution creation scopes an idempotency key to the authenticated tenant and actor. The caller supplies a
-server-validated request digest over the canonical request content. The repository commits the resolution,
-idempotency record and creation event atomically.
+Resolution creation scopes an idempotency key to the authenticated tenant and actor. The HTTP adapter validates
+and canonicalises the v1 request, then computes its SHA-256 digest; callers do not supply digest authority. The
+repository commits the exact canonical request bytes, digest, resolution, idempotency record and creation event
+atomically.
 
 ## Outcomes
 
@@ -19,14 +20,15 @@ succeed under the same scope and key.
 ## Retry guidance
 
 - After a timeout or lost response, retry the identical canonical request with the same key.
-- Do not add timestamps, random fields or reordered non-canonical data that changes the request digest on retry.
+- Retry the same request semantics. Claim and target arrays are sorted by the server, so their input order does
+  not change the canonical request digest.
 - A conflict is non-retryable with the same key and different content.
 - Do not automatically generate a new key after a conflict: that can turn a caller bug into a duplicate operation.
 - Query the resolution returned by an identical replay rather than assuming the original attempt failed.
 
-## Future HTTP mapping
+## HTTP mapping
 
-When resolution creation is exposed over HTTP, the transport adapter must map `ErrIdempotencyConflict` to
+The resolution creation endpoint maps `ErrIdempotencyConflict` to
 `409 Conflict` with a stable, secret-safe body:
 
 ```json
@@ -40,6 +42,8 @@ When resolution creation is exposed over HTTP, the transport adapter must map `E
 ```
 
 The response must not disclose the original request, original digest, another tenant's data or whether the key
-exists outside the authenticated tenant-and-actor scope. Malformed keys and digests remain validation errors,
+exists outside the authenticated tenant-and-actor scope. Malformed keys and request documents remain validation errors,
 not idempotency conflicts. Dead-letter replay has a separate tenant-and-actor-scoped contract documented in
 [`dead-letter-operations.md`](dead-letter-operations.md).
+
+See the complete [resolution creation API contract](resolution-create-api.md).

@@ -3,6 +3,7 @@ package resolution
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,7 +12,10 @@ import (
 	"network_broker/internal/outbox"
 )
 
-const resolutionEventSchemaVersion = "v1"
+const (
+	resolutionEventSchemaVersion = "v1"
+	maximumRequestDocumentSize   = 64 * 1024
+)
 
 // Repository provides the atomic operations required by the resolution
 // workflow. Create and Transition must commit their outbox event in the same
@@ -25,10 +29,11 @@ type Repository interface {
 // CreateRequest is the server-validated input used to establish an idempotent
 // asynchronous workflow.
 type CreateRequest struct {
-	ActorID        string
-	TenantID       string
-	IdempotencyKey string
-	RequestDigest  string
+	ActorID         string
+	TenantID        string
+	IdempotencyKey  string
+	RequestDigest   string
+	RequestDocument []byte
 }
 
 // CreateResult distinguishes a new workflow from an idempotent replay.
@@ -84,7 +89,8 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (CreateResu
 	created := Resolution{
 		ID: resolutionID, ActorID: request.ActorID, TenantID: request.TenantID,
 		IdempotencyKey: request.IdempotencyKey, RequestDigest: request.RequestDigest,
-		State: ResolutionReceived, Version: 1, CreatedAt: now, UpdatedAt: now,
+		RequestDocument: append([]byte(nil), request.RequestDocument...),
+		State:           ResolutionReceived, Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	event, err := resolutionEvent(eventID, "resolution.received", created, now)
 	if err != nil {
@@ -157,11 +163,19 @@ func (s *Service) validateDependencies() error {
 }
 
 func validateCreateRequest(request CreateRequest) error {
-	if request.ActorID == "" || request.TenantID == "" || request.IdempotencyKey == "" || request.RequestDigest == "" {
-		return fmt.Errorf("actor id, tenant id, idempotency key and request digest are required")
+	if request.ActorID == "" || request.TenantID == "" || request.IdempotencyKey == "" || request.RequestDigest == "" ||
+		len(request.RequestDocument) == 0 {
+		return fmt.Errorf("actor id, tenant id, idempotency key, request digest and request document are required")
 	}
 	if len(request.IdempotencyKey) > 128 || len(request.RequestDigest) > 128 {
 		return fmt.Errorf("idempotency key and request digest must not exceed 128 bytes")
+	}
+	if len(request.RequestDocument) > maximumRequestDocumentSize || !json.Valid(request.RequestDocument) {
+		return fmt.Errorf("request document must be valid JSON and not exceed %d bytes", maximumRequestDocumentSize)
+	}
+	digest := sha256.Sum256(request.RequestDocument)
+	if request.RequestDigest != "sha256:"+hex.EncodeToString(digest[:]) {
+		return fmt.Errorf("request digest does not match request document")
 	}
 
 	return nil
@@ -174,6 +188,7 @@ func validateNewResolution(resolution Resolution, event outbox.Event) error {
 	if err := validateCreateRequest(CreateRequest{
 		ActorID: resolution.ActorID, TenantID: resolution.TenantID,
 		IdempotencyKey: resolution.IdempotencyKey, RequestDigest: resolution.RequestDigest,
+		RequestDocument: resolution.RequestDocument,
 	}); err != nil {
 		return err
 	}
@@ -199,12 +214,22 @@ func validateEventBinding(event outbox.Event, tenantID, resolutionID string) err
 }
 
 func resolutionEvent(eventID, eventType string, resolution Resolution, occurredAt time.Time) (outbox.Event, error) {
-	payload, err := json.Marshal(struct {
-		SchemaVersion string          `json:"schema_version"`
-		ResolutionID  string          `json:"resolution_id"`
-		State         ResolutionState `json:"state"`
-		Version       int64           `json:"version"`
-	}{resolutionEventSchemaVersion, resolution.ID, resolution.State, resolution.Version})
+	eventPayload := struct {
+		SchemaVersion   string          `json:"schema_version"`
+		ResolutionID    string          `json:"resolution_id"`
+		State           ResolutionState `json:"state"`
+		Version         int64           `json:"version"`
+		RequestDigest   string          `json:"request_digest,omitempty"`
+		RequestDocument json.RawMessage `json:"request_document,omitempty"`
+	}{
+		SchemaVersion: resolutionEventSchemaVersion, ResolutionID: resolution.ID,
+		State: resolution.State, Version: resolution.Version,
+	}
+	if eventType == "resolution.received" {
+		eventPayload.RequestDigest = resolution.RequestDigest
+		eventPayload.RequestDocument = append(json.RawMessage(nil), resolution.RequestDocument...)
+	}
+	payload, err := json.Marshal(eventPayload)
 	if err != nil {
 		return outbox.Event{}, fmt.Errorf("encode resolution event: %w", err)
 	}

@@ -46,11 +46,12 @@ func (r *PostgresRepository) Create(ctx context.Context, resolution Resolution, 
 
 	if _, err := transaction.ExecContext(ctx, `
 		INSERT INTO broker_resolutions (
-			id, actor_id, tenant_id, idempotency_key, request_digest, state,
+			id, actor_id, tenant_id, idempotency_key, request_digest, request_document, state,
 			target_count, completed, version, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		resolution.ID, resolution.ActorID, resolution.TenantID, resolution.IdempotencyKey,
-		resolution.RequestDigest, resolution.State, resolution.TargetCount, resolution.Completed,
+		resolution.RequestDigest, resolution.RequestDocument, resolution.State,
+		resolution.TargetCount, resolution.Completed,
 		resolution.Version, resolution.CreatedAt, resolution.UpdatedAt,
 	); err != nil {
 		return Resolution{}, false, fmt.Errorf("insert resolution: %w", err)
@@ -99,7 +100,7 @@ func (r *PostgresRepository) Get(ctx context.Context, tenantID, resolutionID str
 		return Resolution{}, fmt.Errorf("resolution database is required")
 	}
 	resolution, err := scanResolution(r.database.QueryRowContext(ctx, `
-		SELECT id, actor_id, tenant_id, idempotency_key, request_digest, state,
+		SELECT id, actor_id, tenant_id, idempotency_key, request_digest, request_document, state,
 		       target_count, completed, version, created_at, updated_at
 		FROM broker_resolutions
 		WHERE tenant_id = $1 AND id = $2`, tenantID, resolutionID))
@@ -141,7 +142,7 @@ func (r *PostgresRepository) Transition(ctx context.Context, tenantID, resolutio
 		UPDATE broker_resolutions
 		SET state = $1, completed = $2, version = version + 1, updated_at = $3
 		WHERE tenant_id = $4 AND id = $5 AND version = $6 AND state = $7 AND updated_at <= $3
-		RETURNING id, actor_id, tenant_id, idempotency_key, request_digest, state,
+		RETURNING id, actor_id, tenant_id, idempotency_key, request_digest, request_document, state,
 		          target_count, completed, version, created_at, updated_at`,
 		next, next.Terminal(), updatedAt, tenantID, resolutionID, expectedVersion, expectedState,
 	))
@@ -185,7 +186,8 @@ func scanResolution(row rowScanner) (Resolution, error) {
 	var resolution Resolution
 	err := row.Scan(
 		&resolution.ID, &resolution.ActorID, &resolution.TenantID, &resolution.IdempotencyKey,
-		&resolution.RequestDigest, &resolution.State, &resolution.TargetCount, &resolution.Completed,
+		&resolution.RequestDigest, &resolution.RequestDocument, &resolution.State,
+		&resolution.TargetCount, &resolution.Completed,
 		&resolution.Version, &resolution.CreatedAt, &resolution.UpdatedAt,
 	)
 
@@ -194,7 +196,7 @@ func scanResolution(row rowScanner) (Resolution, error) {
 
 func getResolutionTx(ctx context.Context, transaction *sql.Tx, tenantID, resolutionID string) (Resolution, error) {
 	return scanResolution(transaction.QueryRowContext(ctx, `
-		SELECT id, actor_id, tenant_id, idempotency_key, request_digest, state,
+		SELECT id, actor_id, tenant_id, idempotency_key, request_digest, request_document, state,
 		       target_count, completed, version, created_at, updated_at
 		FROM broker_resolutions
 		WHERE tenant_id = $1 AND id = $2`, tenantID, resolutionID))

@@ -7,9 +7,9 @@ GET /v1/resolutions/{resolution_id}
 ```
 
 This endpoint reports durable resolution status without triggering collection
-or disclosing evidence. It is a bounded increment toward the complete public
-resolution, watch, QueryContext and retrieval APIs; it does not claim those
-remaining surfaces are implemented.
+or disclosing evidence. It complements the
+[resolution creation API](resolution-create-api.md). Resolution watch,
+QueryContext and retrieval surfaces remain open.
 
 ## Authentication and authority
 

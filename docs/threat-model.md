@@ -30,6 +30,7 @@ This model covers the gateway, policy and approval services, resolution state, c
 | Threat | Required controls | Residual risk |
 |---|---|---|
 | Caller forges tenant or role | Derive identity from a certificate in a verified mTLS chain; require one SPIFFE URI SAN under an allowlisted trust domain and role path | CA or workload issuer compromise |
+| Caller creates ambiguous, replayed or unbounded workflows | Require route-specific create scope, bounded canonical claim/target requests and actor-and-tenant-scoped idempotency; compute and persist the request digest server-side with the exact canonical bytes and creation event | Distributed request amplification until per-tenant admission limits are deployed; malicious but syntactically valid claims still require policy/catalogue rejection |
 | Agent requests arbitrary device operations | Resolve only exact recipe ID and version from a server-owned catalogue; gNMI paths, NETCONF filters and SSH commands never come from task input | Malicious or incorrectly reviewed catalogue entry |
 | Queued work executes after authority changes | Re-evaluate signed active policy immediately after acquiring the fenced lease; bind decision and bundle digests into execution provenance | Incorrect policy or stale inventory classification |
 | Approval is replayed or used for another target | Persist tenant, recipe, target-set hash, expiry, maximum uses and policy decision; consume transactionally and idempotently for one task | Compromised approver or overly broad target set |

@@ -42,6 +42,26 @@ The request uses schema version `v1`, is limited to 512 KiB and 1,000 tasks, rej
 
 The planner is an authority-bearing internal workload. It must submit only catalogue-derived recipes and persisted trigger/planning decision identifiers. Database-role enforcement and direct foreign-key validation of those provenance bindings remain part of the supported deployment hardening gate.
 
+## Authenticated resolution creation
+
+The control plane exposes `POST /v1/resolutions` when mTLS is enabled. A
+verified `agent` identity receives the route-specific `resolutions:create`
+scope. The handler derives actor and tenant from the certificate, requires a
+bounded idempotency key and strictly decodes one bounded v1 claim/target
+request.
+
+Claim and target arrays are validated, deduplicated and sorted before the
+server serializes the canonical document and computes its SHA-256 digest.
+Migration `000012_resolution_request_provenance` preserves those exact bytes.
+Resolution state, request provenance, actor-and-tenant-scoped idempotency and
+the `resolution.received` event commit in one transaction. See the
+[resolution creation API contract](resolution-create-api.md).
+
+The event makes the validated request available to a trusted downstream
+resolver/planner without trusting a caller-supplied digest or reconstructing
+semantics from logs. Production planning consumption of that event and direct
+catalogue/decision provenance constraints remain open qualification work.
+
 ## Authenticated resolution status
 
 The control plane exposes `GET /v1/resolutions/{resolution_id}` when its mTLS
@@ -57,9 +77,9 @@ release evidence. Missing and cross-tenant identifiers return the same 404
 code. Authentication and scope checks precede identifier validation and
 repository access. See the [resolution status API contract](resolution-status-api.md).
 
-This is the first external read slice, not completion of the northbound API.
-Resolution creation/watch, QueryContext, evidence retrieval, per-tenant rate
-limits and deployment-level side-channel qualification remain open.
+Creation and status are bounded external slices, not completion of the
+northbound API. Resolution watch, QueryContext, evidence retrieval, per-tenant
+rate limits and deployment-level side-channel qualification remain open.
 
 ## Reconciliation scheduling
 
@@ -77,6 +97,8 @@ Prometheus counters report candidates, reconciled envelopes, expected skips and 
 
 The PostgreSQL integration suite proves:
 
+- canonical request bytes and their digest survive repository reconstruction
+  and are present in the transactional creation event;
 - two concurrent planners create one complete task set and one outbox event;
 - the concurrent planners enter through the authenticated, tenant-binding planning service;
 - a collector assembled exclusively from durable repository boundaries completes a task and its result survives reconstruction;

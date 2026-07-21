@@ -2,8 +2,11 @@ package resolution
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +34,8 @@ func TestServiceCreatesAndReplaysIdempotentResolution(t *testing.T) {
 	}
 	if events := repository.PendingEvents(10); len(events) != 1 || events[0].Type != "resolution.received" {
 		t.Fatalf("expected one creation event, got %+v", events)
+	} else if !strings.Contains(string(events[0].Payload), `"request_document":{"claims":["interface.state"]}`) {
+		t.Fatalf("creation event omitted canonical request provenance: %s", events[0].Payload)
 	}
 }
 
@@ -40,7 +45,8 @@ func TestServiceRejectsIdempotencyKeyReusedForDifferentRequest(t *testing.T) {
 	if _, err := service.Create(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
-	request.RequestDigest = "sha256:different"
+	request.RequestDocument = []byte(`{"claims":["interface.counters"]}`)
+	request.RequestDigest = requestDocumentDigest(request.RequestDocument)
 	if _, err := service.Create(context.Background(), request); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
@@ -146,6 +152,38 @@ func TestMemoryRepositoryReturnsDetachedOutboxPayloads(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryReturnsDetachedRequestDocuments(t *testing.T) {
+	repository := NewMemoryRepository()
+	service := testService(repository)
+	created, err := service.Create(context.Background(), validCreateRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.Resolution.RequestDocument[0] = 'X'
+	stored, err := service.Get(context.Background(), created.Resolution.TenantID, created.Resolution.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.RequestDocument[0] == 'X' {
+		t.Fatal("caller mutated authoritative request document")
+	}
+}
+
+func TestServiceRejectsInvalidOrMismatchedRequestProvenance(t *testing.T) {
+	service := testService(NewMemoryRepository())
+	invalidJSON := validCreateRequest()
+	invalidJSON.RequestDocument = []byte("not-json")
+	invalidJSON.RequestDigest = requestDocumentDigest(invalidJSON.RequestDocument)
+	if _, err := service.Create(context.Background(), invalidJSON); err == nil {
+		t.Fatal("expected invalid request JSON to fail")
+	}
+	mismatch := validCreateRequest()
+	mismatch.RequestDigest = requestDocumentDigest([]byte(`{"different":true}`))
+	if _, err := service.Create(context.Background(), mismatch); err == nil {
+		t.Fatal("expected request digest mismatch to fail")
+	}
+}
+
 func TestMemoryRepositoryRejectsInvalidTransitionWithoutStateOrEventChange(t *testing.T) {
 	repository := NewMemoryRepository()
 	service := testService(repository)
@@ -175,9 +213,17 @@ func TestNewPostgresRepositoryRejectsNilDatabase(t *testing.T) {
 }
 
 func validCreateRequest() CreateRequest {
+	document := []byte(`{"claims":["interface.state"]}`)
 	return CreateRequest{
-		ActorID: "actor-a", TenantID: "tenant-a", IdempotencyKey: "request-1", RequestDigest: "sha256:request-1",
+		ActorID: "actor-a", TenantID: "tenant-a", IdempotencyKey: "request-1",
+		RequestDigest: requestDocumentDigest(document), RequestDocument: document,
 	}
+}
+
+func requestDocumentDigest(document []byte) string {
+	digest := sha256.Sum256(document)
+
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func testService(repository Repository) *Service {

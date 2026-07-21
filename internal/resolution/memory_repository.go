@@ -49,17 +49,18 @@ func (r *MemoryRepository) Create(_ context.Context, resolution Resolution, even
 			return Resolution{}, false, ErrIdempotencyConflict
 		}
 
-		return r.resolutions[record.resolutionID], false, nil
+		return cloneResolution(r.resolutions[record.resolutionID]), false, nil
 	}
 	if _, exists := r.resolutions[resolution.ID]; exists {
 		return Resolution{}, false, fmt.Errorf("%w: duplicate resolution id", ErrVersionConflict)
 	}
 
+	resolution = cloneResolution(resolution)
 	r.resolutions[resolution.ID] = resolution
 	r.idempotency[key] = idempotencyRecord{requestDigest: resolution.RequestDigest, resolutionID: resolution.ID}
 	r.events = append(r.events, event.Clone())
 
-	return resolution, true, nil
+	return cloneResolution(resolution), true, nil
 }
 
 // Get returns a tenant-scoped resolution snapshot.
@@ -75,7 +76,7 @@ func (r *MemoryRepository) Get(_ context.Context, tenantID, resolutionID string)
 		return Resolution{}, fmt.Errorf("%w: %q", ErrNotFound, resolutionID)
 	}
 
-	return resolution, nil
+	return cloneResolution(resolution), nil
 }
 
 // Transition performs a compare-and-set update and outbox append atomically.
@@ -111,7 +112,7 @@ func (r *MemoryRepository) Transition(_ context.Context, tenantID, resolutionID 
 	r.resolutions[resolutionID] = resolution
 	r.events = append(r.events, event.Clone())
 
-	return resolution, nil
+	return cloneResolution(resolution), nil
 }
 
 // PendingEvents returns detached events in commit order. It is intended for
@@ -136,4 +137,10 @@ func (r *MemoryRepository) PendingEvents(limit int) []outbox.Event {
 
 func idempotencyMapKey(tenantID, actorID, key string) string {
 	return tenantID + "\x00" + actorID + "\x00" + key
+}
+
+func cloneResolution(value Resolution) Resolution {
+	value.RequestDocument = append([]byte(nil), value.RequestDocument...)
+
+	return value
 }
