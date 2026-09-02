@@ -4,7 +4,9 @@ package integration_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -93,8 +95,11 @@ func TestPostgresResolutionAndOutboxLifecycle(t *testing.T) {
 	service := resolution.NewServiceWithRepository(repository, func() time.Time { return now }, func(prefix string) (string, error) {
 		return fmt.Sprintf("%s-integration-%d", prefix, sequence.Add(1)), nil
 	})
+	requestDocument := []byte(`{"schema_version":"v1","claims":["interface.counters"],"target_ids":["router-1"]}`)
+	requestDigest := sha256.Sum256(requestDocument)
 	request := resolution.CreateRequest{
-		ActorID: "actor-a", TenantID: "tenant-a", IdempotencyKey: "request-1", RequestDigest: "sha256:request-1",
+		ActorID: "actor-a", TenantID: "tenant-a", IdempotencyKey: "request-1",
+		RequestDigest: "sha256:" + hex.EncodeToString(requestDigest[:]), RequestDocument: requestDocument,
 	}
 	created, err := service.Create(ctx, request)
 	if err != nil {
