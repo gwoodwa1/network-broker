@@ -1,0 +1,63 @@
+version: 2
+
+project_name: network-broker
+
+before:
+  hooks:
+    - go mod tidy
+    - go run github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.9.0 mod -json -output sbom.cdx.json
+
+builds:
+  - id: collector
+    main: ./cmd/collector
+    binary: collector
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -buildid=
+
+  - id: controlplane
+    main: ./cmd/controlplane
+    binary: controlplane
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -buildid=
+
+archives:
+  - id: network-broker
+    ids:
+      - collector
+      - controlplane
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE.md
+      - README.md
+      - sbom.cdx.json
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  prerelease: auto
+  header: |
+    Network Broker v{{ .Version }}
+
+    The archive contains the collector and control-plane binaries plus the project SBOM.

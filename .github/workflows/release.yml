@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  EXPECTED_GO_VERSION: go1.27.1
+  GOVULNCHECK_VERSION: v1.7.0
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify Go toolchain
+        run: |
+          go version
+          go env GOVERSION GOTOOLCHAIN GOPROXY GOSUMDB
+          test "$(go env GOVERSION)" = "${EXPECTED_GO_VERSION}"
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Install govulncheck
+        run: |
+          mkdir -p "${RUNNER_TEMP}/security-tools"
+          GOBIN="${RUNNER_TEMP}/security-tools" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          echo "${RUNNER_TEMP}/security-tools" >> "${GITHUB_PATH}"
+
+      - name: Go source and test vulnerability scans
+        run: |
+          govulncheck -show verbose ./...
+          govulncheck -test -show verbose ./...
+
+      - name: Build and upload draft release
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --clean --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan every draft release binary
+        run: scripts/scan-release-binaries.sh dist
+
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false

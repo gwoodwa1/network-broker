@@ -23,9 +23,11 @@ linters:
     - durationcheck
     - errcheck
     - errchkjson
+    - errname
     - errorlint
     - exhaustive
     - fatcontext
+    - forbidigo
     - funlen
     - gocheckcompilerdirectives
     - gochecksumtype
@@ -93,6 +95,12 @@ linters:
         - fmt.Fprintln
     exhaustive:
       default-signifies-exhaustive: true
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$
+          pkg: ^log$
+          msg: Use log/slog with structured attributes instead of the standard log package.
     funlen:
       lines: 80
       statements: 50
@@ -149,6 +157,17 @@ linters:
           disabled: true
         - name: use-slices-sort
           disabled: true
+    sloglint:
+      forbidden-keys:
+        - time
+        - level
+        - msg
+        - source
+      key-naming-case: snake
+      kv-only: true
+      msg-style: lowercased
+      no-global: all
+      static-msg: true
 
   exclusions:
     generated: strict

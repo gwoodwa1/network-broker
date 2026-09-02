@@ -50,6 +50,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Enforce constructor usage
+        run: go run ./internal/tools/constructorcheck
+
       - name: Test with race detector
         run: go test -race -count=1 ./...
 
@@ -132,8 +135,8 @@ jobs:
         with:
           repo-checkout: false
           # The action defaults go-version-input to "stable", which takes
-          # precedence over go-version-file and currently selects Go 1.27.
-          go-version-input: '1.25.0'
+          # precedence over go-version-file. Pin the exact CI patch release.
+          go-version-input: '1.27.1'
           go-package: ./...
           cache: false
 

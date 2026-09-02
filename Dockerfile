@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG GO_VERSION=1.26.5
+ARG GO_VERSION=1.27.1
 
 FROM golang:${GO_VERSION}-bookworm AS build
 
@@ -15,18 +15,18 @@ COPY migrations ./migrations
 
 RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
-      -ldflags="-s -w -buildid=" \
+      -ldflags="-buildid=" \
       -o /out/collector ./cmd/collector \
     && CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
-      -ldflags="-s -w -buildid=" \
+      -ldflags="-buildid=" \
       -o /out/controlplane ./cmd/controlplane
 
 FROM golang:${GO_VERSION}-bookworm AS quality
 
 ARG GOLANGCI_LINT_VERSION=v2.12.2
 ARG GOSEC_VERSION=v2.25.0
-ARG GOVULNCHECK_VERSION=v1.1.4
+ARG GOVULNCHECK_VERSION=v1.7.0
 
 ENV GOBIN=/usr/local/bin
 WORKDIR /src
