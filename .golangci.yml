@@ -184,7 +184,10 @@ formatters:
   settings:
     gofumpt:
       module-path: network_broker
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
+        balance-calls: true
 
 issues:
   max-issues-per-linter: 0
