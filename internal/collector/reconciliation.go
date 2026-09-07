@@ -104,7 +104,8 @@ func (r *PostgresRepository) classifyEvidenceReconciliation(ctx context.Context,
 	err := r.database.QueryRowContext(ctx, `
 		SELECT tenant_id, task_id, accepted_attempt_id, fencing_token, execution_grant_id
 		FROM broker_evidence_envelopes WHERE evidence_id = $1`, evidenceID).Scan(
-		&tenantID, &taskID, &attemptID, &fencingToken, &grantID)
+		&tenantID, &taskID, &attemptID, &fencingToken, &grantID,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Task{}, ErrEvidenceNotFound
 	}

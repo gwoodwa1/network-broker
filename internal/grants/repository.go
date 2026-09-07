@@ -193,7 +193,8 @@ func (r *PostgresConsumptionRepository) Get(ctx context.Context, tenantID,
 		&record.GrantID, &record.NonceDigest, &record.GrantDigest, &record.TenantID,
 		&record.TaskID, &record.CollectorSPIFFEID, &record.TargetID, &record.RecipeID,
 		&record.RecipeVersion, &record.FencingToken, &record.GrantExpiresAt,
-		&record.RequestedAt, &record.ConsumedAt)
+		&record.RequestedAt, &record.ConsumedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConsumptionRecord{}, ErrConsumptionNotFound
 	}
@@ -222,7 +223,8 @@ func lockAndValidateTask(ctx context.Context, transaction *sql.Tx,
 			state, lease_expiry, clock_timestamp()
 		FROM broker_collector_tasks WHERE id = $1 FOR UPDATE`, consumption.TaskID).Scan(
 		&tenantID, &collectorID, &targetID, &recipeID, &recipeVersion, &grantID,
-		&fencingToken, &state, &leaseExpiry, &databaseNow)
+		&fencingToken, &state, &leaseExpiry, &databaseNow,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrBindingMismatch
 	}

@@ -85,7 +85,8 @@ func New(configuration Config, dependencies Dependencies) (*Runtime, error) {
 		artefactStore, configuration.Sanitiser, configuration.Parser, assembler,
 		configuration.TransportName, dependencies.Encryption, envelopes,
 		configuration.CollectorVersion, configuration.NormaliserVersion,
-		configuration.EvidenceValidity, time.Now)
+		configuration.EvidenceValidity, time.Now,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -166,7 +166,8 @@ func scanStoredEnvelope(row storedEnvelopeRow, evidenceID string) (EvidenceEnvel
 	var document []byte
 	err := row.Scan(
 		&storedTenant, &taskID, &attemptID, &fencingToken, &executionGrantID, &targetID, &recipeID,
-		&observedAt, &validUntil, &document, &digest)
+		&observedAt, &validUntil, &document, &digest,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return EvidenceEnvelope{}, ErrEnvelopeNotFound
 	}

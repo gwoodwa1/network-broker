@@ -68,7 +68,8 @@ func Verify(ctx context.Context, database *sql.DB, expected string) (Role, error
 		WHERE role.rolname = current_user`).Scan(
 		&role.CurrentUser, &role.SessionUser, &role.Superuser, &role.BypassRowSecurity,
 		&role.CreateRole, &role.CreateDatabase, &role.Replication, &role.CanLogin,
-		&role.CanUsePublic, &role.CanCreatePublic)
+		&role.CanUsePublic, &role.CanCreatePublic,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Role{}, fmt.Errorf("connected PostgreSQL role was not found")
 	}

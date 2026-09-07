@@ -256,7 +256,8 @@ func (r *PostgresRepository) getDecision(ctx context.Context, tenantID,
 		SELECT tenant_id, actor_id, evidence_id, evaluated_at, expires_at, document, document_digest
 		FROM broker_disclosure_decisions WHERE tenant_id = $1 AND decision_id = $2`,
 		tenantID, decisionID).Scan(
-		&storedTenant, &actorID, &evidenceID, &evaluatedAt, &expiresAt, &document, &digest)
+		&storedTenant, &actorID, &evidenceID, &evaluatedAt, &expiresAt, &document, &digest,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Decision{}, nil, ErrDecisionNotFound
 	}
@@ -294,7 +295,8 @@ func (r *PostgresRepository) getReceipt(ctx context.Context, predicate string,
 	var document []byte
 	err := r.database.QueryRowContext(ctx, query, arguments...).Scan(
 		&receiptID, &tenantID, &evidenceID, &actorID, &decisionID, &requestID,
-		&payloadDigest, &deliveredAt, &schemaVersion, &document, &digest)
+		&payloadDigest, &deliveredAt, &schemaVersion, &document, &digest,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Receipt{}, ErrReceiptNotFound
 	}

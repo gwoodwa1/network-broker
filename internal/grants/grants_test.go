@@ -126,7 +126,8 @@ func TestSharedConsumptionRepositorySurvivesAuthorityRecreation(t *testing.T) {
 	fences := &fenceStore{tokens: map[string]int64{"task-1": 7}}
 	consumptions := NewMemoryConsumptionRepository()
 	firstAuthority, err := NewAuthorityWithProviderAndRepository(
-		"credential-broker", "site-a", keyring, fences, consumptions)
+		"credential-broker", "site-a", keyring, fences, consumptions,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,8 @@ func TestSharedConsumptionRepositorySurvivesAuthorityRecreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondAuthority, err := NewAuthorityWithProviderAndRepository(
-		"credential-broker", "site-a", keyring, fences, consumptions)
+		"credential-broker", "site-a", keyring, fences, consumptions,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

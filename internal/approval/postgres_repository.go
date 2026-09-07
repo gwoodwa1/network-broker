@@ -34,7 +34,8 @@ func (r *PostgresRepository) Create(ctx context.Context, request CreateRequest) 
 		request.MaxUses, request.ExpiresAt.UTC(), request.CreatedBy, request.PolicyDecisionID).Scan(
 		&grant.GrantID, &grant.TenantID, &grant.RecipeID, &grant.TargetSubsetHash,
 		&grant.MaxUses, &grant.Used, &grant.ExpiresAt, &grant.CreatedBy,
-		&grant.PolicyDecisionID, &grant.Version, &grant.CreatedAt)
+		&grant.PolicyDecisionID, &grant.Version, &grant.CreatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Grant{}, ErrExpired
 	}
@@ -54,7 +55,8 @@ func (r *PostgresRepository) Get(ctx context.Context, tenantID, grantID string) 
 		tenantID, grantID).Scan(
 		&grant.GrantID, &grant.TenantID, &grant.RecipeID, &grant.TargetSubsetHash,
 		&grant.MaxUses, &grant.Used, &grant.ExpiresAt, &grant.CreatedBy,
-		&grant.PolicyDecisionID, &grant.Version, &grant.CreatedAt)
+		&grant.PolicyDecisionID, &grant.Version, &grant.CreatedAt,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Grant{}, ErrNotFound
 	}
@@ -84,7 +86,8 @@ func (r *PostgresRepository) Consume(ctx context.Context, request ConsumeRequest
 		request.TenantID, request.GrantID).Scan(
 		&grant.GrantID, &grant.TenantID, &grant.RecipeID, &grant.TargetSubsetHash,
 		&grant.MaxUses, &grant.Used, &grant.ExpiresAt, &grant.CreatedBy,
-		&grant.PolicyDecisionID, &grant.Version, &grant.CreatedAt, &databaseNow)
+		&grant.PolicyDecisionID, &grant.Version, &grant.CreatedAt, &databaseNow,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Grant{}, ErrNotFound
 	}
@@ -140,7 +143,8 @@ func existingConsumption(ctx context.Context, transaction *sql.Tx, request Consu
 		FROM broker_approval_consumptions
 		WHERE consumption_id = $1 OR (grant_id = $2 AND task_id = $3)
 		LIMIT 1`, request.ConsumptionID, request.GrantID, request.TaskID).Scan(
-		&consumptionID, &grantID, &tenantID, &taskID)
+		&consumptionID, &grantID, &tenantID, &taskID,
+	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
