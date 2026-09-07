@@ -50,10 +50,7 @@ jobs:
       - name: Run strict golangci-lint checks
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
-          # Official v2.12.2 binaries were built with Go 1.26 and cannot lint
-          # modules targeting Go 1.27. Build it with the configured toolchain.
-          install-mode: goinstall
+          version: v2.13.2
           args: --timeout=5m
 
       - name: Enforce constructor usage
