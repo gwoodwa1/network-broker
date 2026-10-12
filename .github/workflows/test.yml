@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  EXPECTED_GO_VERSION: go1.27.1
+  EXPECTED_GO_VERSION: go1.27.2
   GOVULNCHECK_VERSION: v1.7.0
 
 jobs:
@@ -50,7 +50,7 @@ jobs:
       - name: Run strict golangci-lint checks
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.2
+          version: v2.14.0
           args: --timeout=5m
 
       - name: Enforce constructor usage

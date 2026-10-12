@@ -38,7 +38,7 @@ func writeFixture(t *testing.T, mainSource string) string {
 	t.Helper()
 
 	root := t.TempDir()
-	writeFixtureFile(t, root, "go.mod", "module example.com/project\n\ngo 1.27.1\n")
+	writeFixtureFile(t, root, "go.mod", "module example.com/project\n\ngo 1.27.2\n")
 	writeFixtureFile(t, root, "internal/widget/widget.go", `package widget
 
 type Widget struct{}

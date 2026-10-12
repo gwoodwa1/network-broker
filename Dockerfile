@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.2
 
 FROM golang:${GO_VERSION}-bookworm AS build
 
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 FROM golang:${GO_VERSION}-bookworm AS quality
 
-ARG GOLANGCI_LINT_VERSION=v2.12.2
+ARG GOLANGCI_LINT_VERSION=v2.14.0
 ARG GOSEC_VERSION=v2.25.0
 ARG GOVULNCHECK_VERSION=v1.7.0
 
