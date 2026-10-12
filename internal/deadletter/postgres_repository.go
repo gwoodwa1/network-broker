@@ -116,23 +116,12 @@ func (r *PostgresRepository) Replay(ctx context.Context, command ReplayCommand) 
 		return existing, nil
 	}
 
-	var sequence int64
-	var eventID, lastError string
-	var attempts int
-	var priorDeadLetteredAt time.Time
-	scanErr := transaction.QueryRowContext(ctx, `
-		SELECT sequence, id, dead_lettered_at, attempts, COALESCE(last_error, '')
-		FROM broker_outbox
-		WHERE tenant_id = $1 AND id = $2 AND published_at IS NULL AND dead_lettered_at IS NOT NULL
-		FOR UPDATE`, command.TenantID, command.EventID,
-	).Scan(&sequence, &eventID, &priorDeadLetteredAt, &attempts, &lastError)
-	if errors.Is(scanErr, sql.ErrNoRows) {
-		return ReplayResult{}, ErrNotFound
-	} else if scanErr != nil {
-		return ReplayResult{}, fmt.Errorf("lock dead-lettered event: %w", scanErr)
+	lockedEvent, lockErr := lockDeadLetteredEvent(ctx, transaction, command)
+	if lockErr != nil {
+		return ReplayResult{}, lockErr
 	}
 
-	result = ReplayResult{ActionID: command.ActionID, EventID: eventID, Replayed: true}
+	result = ReplayResult{ActionID: command.ActionID, EventID: lockedEvent.eventID, Replayed: true}
 	insertErr := transaction.QueryRowContext(ctx, `
 		INSERT INTO broker_dead_letter_actions (
 			action_id, tenant_id, outbox_sequence, event_id, actor_id, spiffe_id,
@@ -140,9 +129,9 @@ func (r *PostgresRepository) Replay(ctx context.Context, command ReplayCommand) 
 			attempts_at_action, last_error_at_action, available_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, 'replay', $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
 		RETURNING requested_at, available_at`,
-		command.ActionID, command.TenantID, sequence, eventID, command.ActorID, command.SPIFFEID,
-		command.IdentityRevision, command.IdempotencyKey, command.Reason, priorDeadLetteredAt,
-		attempts, lastError,
+		command.ActionID, command.TenantID, lockedEvent.sequence, lockedEvent.eventID, command.ActorID, command.SPIFFEID,
+		command.IdentityRevision, command.IdempotencyKey, command.Reason, lockedEvent.deadLetteredAt,
+		lockedEvent.attempts, lockedEvent.lastError,
 	).Scan(&result.RequestedAt, &result.AvailableAt)
 	if insertErr != nil {
 		return ReplayResult{}, fmt.Errorf("insert dead-letter replay audit: %w", insertErr)
@@ -152,7 +141,7 @@ func (r *PostgresRepository) Replay(ctx context.Context, command ReplayCommand) 
 		SET dead_lettered_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
 		    attempts = 0, available_at = $2
 		WHERE sequence = $1 AND published_at IS NULL AND dead_lettered_at IS NOT NULL`,
-		sequence, result.AvailableAt)
+		lockedEvent.sequence, result.AvailableAt)
 	if err != nil {
 		return ReplayResult{}, fmt.Errorf("requeue dead-lettered event: %w", err)
 	}
@@ -168,6 +157,32 @@ func (r *PostgresRepository) Replay(ctx context.Context, command ReplayCommand) 
 	}
 
 	return result, nil
+}
+
+type lockedDeadLetterEvent struct {
+	sequence       int64
+	eventID        string
+	deadLetteredAt time.Time
+	attempts       int
+	lastError      string
+}
+
+func lockDeadLetteredEvent(ctx context.Context, transaction *sql.Tx, command ReplayCommand) (lockedDeadLetterEvent, error) {
+	var event lockedDeadLetterEvent
+	scanErr := transaction.QueryRowContext(ctx, `
+		SELECT sequence, id, dead_lettered_at, attempts, COALESCE(last_error, '')
+		FROM broker_outbox
+		WHERE tenant_id = $1 AND id = $2 AND published_at IS NULL AND dead_lettered_at IS NOT NULL
+		FOR UPDATE`, command.TenantID, command.EventID,
+	).Scan(&event.sequence, &event.eventID, &event.deadLetteredAt, &event.attempts, &event.lastError)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return lockedDeadLetterEvent{}, ErrNotFound
+	}
+	if scanErr != nil {
+		return lockedDeadLetterEvent{}, fmt.Errorf("lock dead-lettered event: %w", scanErr)
+	}
+
+	return event, nil
 }
 
 func findReplay(ctx context.Context, transaction *sql.Tx, command ReplayCommand) (ReplayResult, bool, error) {
