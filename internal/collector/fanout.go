@@ -44,13 +44,14 @@ func (r *PostgresRepository) CreateFanoutContext(ctx context.Context,
 
 	var version int64
 	var state string
-	if err := transaction.QueryRowContext(ctx, `
+	scanErr := transaction.QueryRowContext(ctx, `
 		SELECT version, state FROM broker_resolutions
 		WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, request.TenantID,
-		request.ResolutionID).Scan(&version, &state); errors.Is(err, sql.ErrNoRows) {
+		request.ResolutionID).Scan(&version, &state)
+	if errors.Is(scanErr, sql.ErrNoRows) {
 		return fmt.Errorf("%w: resolution was not found", ErrFanoutConflict)
-	} else if err != nil {
-		return fmt.Errorf("lock resolution for task fan-out: %w", err)
+	} else if scanErr != nil {
+		return fmt.Errorf("lock resolution for task fan-out: %w", scanErr)
 	}
 	if version != request.ExpectedResolutionVersion || state != "planning" {
 		return ErrFanoutConflict

@@ -135,9 +135,10 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 	if err != nil {
 		return w.failAttempt(ctx, taskID, lease, now(), fmt.Errorf("issue execution grant for task %q: %w", taskID, err))
 	}
-	if err := w.Tasks.RecordExecutionAuthorityContext(ctx, taskID, w.ID, lease.FencingToken,
-		authorization.DecisionID, grant.GrantID, now()); err != nil {
-		return err
+	authorityErr := w.Tasks.RecordExecutionAuthorityContext(ctx, taskID, w.ID, lease.FencingToken,
+		authorization.DecisionID, grant.GrantID, now())
+	if authorityErr != nil {
+		return authorityErr
 	}
 	task, err = w.Tasks.GetContext(ctx, taskID)
 	if err != nil {
@@ -192,8 +193,9 @@ func (w Worker) Run(ctx context.Context, taskID string) error {
 func (w Worker) failAttempt(ctx context.Context, taskID string, lease Lease, failedAt time.Time, cause error) error {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failurePersistenceTimeout)
 	defer cancel()
-	if retryErr := w.Tasks.RetryContext(cleanupCtx, taskID, w.ID, lease.FencingToken,
-		failedAt, cause); retryErr != nil {
+	retryErr := w.Tasks.RetryContext(cleanupCtx, taskID, w.ID, lease.FencingToken,
+		failedAt, cause)
+	if retryErr != nil {
 		return errors.Join(cause, fmt.Errorf("return task %q to retry wait: %w", taskID, retryErr))
 	}
 

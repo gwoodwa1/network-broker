@@ -139,9 +139,10 @@ func inspectTableGrants(ctx context.Context, database *sql.DB) (grants []objectG
 		grant := objectGrant{Privileges: make(map[string]bool, 7)}
 		var selectPrivilege, insertPrivilege, updatePrivilege, deletePrivilege bool
 		var truncatePrivilege, referencesPrivilege, triggerPrivilege bool
-		if err := rows.Scan(&grant.Name, &selectPrivilege, &insertPrivilege, &updatePrivilege,
-			&deletePrivilege, &truncatePrivilege, &referencesPrivilege, &triggerPrivilege); err != nil {
-			return nil, fmt.Errorf("read PostgreSQL table privileges: %w", err)
+		scanErr := rows.Scan(&grant.Name, &selectPrivilege, &insertPrivilege, &updatePrivilege,
+			&deletePrivilege, &truncatePrivilege, &referencesPrivilege, &triggerPrivilege)
+		if scanErr != nil {
+			return nil, fmt.Errorf("read PostgreSQL table privileges: %w", scanErr)
 		}
 		grant.Privileges["SELECT"] = selectPrivilege
 		grant.Privileges["INSERT"] = insertPrivilege

@@ -59,19 +59,21 @@ func (r *PostgresRepository) Create(ctx context.Context, metadata Metadata) (err
 		return fmt.Errorf("inspect artefact metadata insert: %w", err)
 	}
 	if rows == 1 {
-		if _, err := transaction.ExecContext(ctx, `
+		_, lifecycleErr := transaction.ExecContext(ctx, `
 			INSERT INTO broker_artefact_lifecycle (tenant_id, artefact_id)
-			VALUES ($1, $2)`, metadata.TenantID, metadata.ArtefactID); err != nil {
-			return fmt.Errorf("insert initial artefact lifecycle: %w", err)
+			VALUES ($1, $2)`, metadata.TenantID, metadata.ArtefactID)
+		if lifecycleErr != nil {
+			return fmt.Errorf("insert initial artefact lifecycle: %w", lifecycleErr)
 		}
-		if _, err := transaction.ExecContext(ctx, `
+		_, eventErr := transaction.ExecContext(ctx, `
 			INSERT INTO broker_artefact_lifecycle_events (
 				tenant_id, artefact_id, version, action, previous_state, next_state,
 				previous_legal_hold, next_legal_hold, actor_id, reason
 			) VALUES ($1, $2, 1, 'created', NULL, 'active', NULL, FALSE,
 				'system:artefact-store', 'artefact metadata recorded')`,
-			metadata.TenantID, metadata.ArtefactID); err != nil {
-			return fmt.Errorf("append initial artefact lifecycle event: %w", err)
+			metadata.TenantID, metadata.ArtefactID)
+		if eventErr != nil {
+			return fmt.Errorf("append initial artefact lifecycle event: %w", eventErr)
 		}
 		if err := transaction.Commit(); err != nil {
 			return fmt.Errorf("commit artefact metadata insert: %w", err)

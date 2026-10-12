@@ -61,7 +61,7 @@ func (r *PostgresRepository) ApplyLifecycle(ctx context.Context, command Lifecyc
 	if rows != 1 {
 		return Lifecycle{}, ErrLifecycleConflict
 	}
-	if _, err := transaction.ExecContext(ctx, `
+	_, eventErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_artefact_lifecycle_events (
 			tenant_id, artefact_id, version, action, previous_state, next_state,
 			previous_retain_until, next_retain_until, previous_legal_hold,
@@ -69,8 +69,9 @@ func (r *PostgresRepository) ApplyLifecycle(ctx context.Context, command Lifecyc
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		command.TenantID, command.ArtefactID, next.Version, command.Action, current.State, next.State,
 		current.RetainUntil, next.RetainUntil, current.LegalHold, next.LegalHold,
-		command.ActorID, command.Reason, now); err != nil {
-		return Lifecycle{}, fmt.Errorf("append artefact lifecycle event: %w", err)
+		command.ActorID, command.Reason, now)
+	if eventErr != nil {
+		return Lifecycle{}, fmt.Errorf("append artefact lifecycle event: %w", eventErr)
 	}
 	if err := transaction.Commit(); err != nil {
 		return Lifecycle{}, fmt.Errorf("commit artefact lifecycle transition: %w", err)
@@ -87,11 +88,12 @@ func scanLifecycle(row rowScanner) (Lifecycle, error) {
 	var lifecycle Lifecycle
 	var state string
 	var retainUntil sql.NullTime
-	if err := row.Scan(&lifecycle.TenantID, &lifecycle.ArtefactID, &state, &retainUntil,
-		&lifecycle.LegalHold, &lifecycle.Version, &lifecycle.UpdatedAt); errors.Is(err, sql.ErrNoRows) {
+	scanErr := row.Scan(&lifecycle.TenantID, &lifecycle.ArtefactID, &state, &retainUntil,
+		&lifecycle.LegalHold, &lifecycle.Version, &lifecycle.UpdatedAt)
+	if errors.Is(scanErr, sql.ErrNoRows) {
 		return Lifecycle{}, ErrArtefactNotFound
-	} else if err != nil {
-		return Lifecycle{}, fmt.Errorf("scan artefact lifecycle: %w", err)
+	} else if scanErr != nil {
+		return Lifecycle{}, fmt.Errorf("scan artefact lifecycle: %w", scanErr)
 	}
 	lifecycle.State = LifecycleState(state)
 	if retainUntil.Valid {
@@ -113,11 +115,12 @@ func lockLifecycle(ctx context.Context, transaction *sql.Tx, tenantID, artefactI
 	var state string
 	var retainUntil sql.NullTime
 	var now time.Time
-	if err := row.Scan(&lifecycle.TenantID, &lifecycle.ArtefactID, &state, &retainUntil,
-		&lifecycle.LegalHold, &lifecycle.Version, &lifecycle.UpdatedAt, &now); errors.Is(err, sql.ErrNoRows) {
+	scanErr := row.Scan(&lifecycle.TenantID, &lifecycle.ArtefactID, &state, &retainUntil,
+		&lifecycle.LegalHold, &lifecycle.Version, &lifecycle.UpdatedAt, &now)
+	if errors.Is(scanErr, sql.ErrNoRows) {
 		return Lifecycle{}, time.Time{}, ErrArtefactNotFound
-	} else if err != nil {
-		return Lifecycle{}, time.Time{}, fmt.Errorf("lock artefact lifecycle: %w", err)
+	} else if scanErr != nil {
+		return Lifecycle{}, time.Time{}, fmt.Errorf("lock artefact lifecycle: %w", scanErr)
 	}
 	lifecycle.State = LifecycleState(state)
 	if retainUntil.Valid {

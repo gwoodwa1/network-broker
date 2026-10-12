@@ -116,18 +116,20 @@ func (r *PostgresRepository) Consume(ctx context.Context, request ConsumeRequest
 	}
 	grant.Used++
 	grant.Version++
-	if _, err := transaction.ExecContext(ctx, `
+	_, updateErr := transaction.ExecContext(ctx, `
 		UPDATE broker_approval_grants SET used = $3, version = $4
 		WHERE tenant_id = $1 AND grant_id = $2`, request.TenantID, request.GrantID,
-		grant.Used, grant.Version); err != nil {
-		return Grant{}, fmt.Errorf("update approval grant consumption: %w", err)
+		grant.Used, grant.Version)
+	if updateErr != nil {
+		return Grant{}, fmt.Errorf("update approval grant consumption: %w", updateErr)
 	}
-	if _, err := transaction.ExecContext(ctx, `
+	_, consumptionErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_approval_consumptions (
 			consumption_id, grant_id, tenant_id, task_id, actor_id, grant_version
 		) VALUES ($1, $2, $3, $4, $5, $6)`, request.ConsumptionID, request.GrantID,
-		request.TenantID, request.TaskID, request.ActorID, grant.Version); err != nil {
-		return Grant{}, fmt.Errorf("record approval consumption: %w", err)
+		request.TenantID, request.TaskID, request.ActorID, grant.Version)
+	if consumptionErr != nil {
+		return Grant{}, fmt.Errorf("record approval consumption: %w", consumptionErr)
 	}
 	if err := transaction.Commit(); err != nil {
 		return Grant{}, fmt.Errorf("commit approval consumption: %w", err)
