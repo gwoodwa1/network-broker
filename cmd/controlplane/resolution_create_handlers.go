@@ -149,10 +149,11 @@ func (a *resolutionCreateAPI) create(response http.ResponseWriter, request *http
 	response.Header().Set("Content-Type", "application/json")
 	response.Header().Set("Location", "/v1/resolutions/"+result.Resolution.ID)
 	response.WriteHeader(http.StatusAccepted)
-	if err := json.NewEncoder(response).Encode(createResolutionResponse{
+	encodeErr := json.NewEncoder(response).Encode(createResolutionResponse{
 		SchemaVersion: resolutionStatusSchemaVersion, ResolutionID: result.Resolution.ID,
 		State: result.Resolution.State, Version: result.Resolution.Version, Created: result.Created,
-	}); err != nil {
+	})
+	if encodeErr != nil {
 		a.logger.ErrorContext(request.Context(), "encode resolution creation response failed", "error", err)
 	}
 }
@@ -247,9 +248,10 @@ func writeResolutionCreateError(response http.ResponseWriter, status int, code, 
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
-	if err := json.NewEncoder(response).Encode(resolutionCreateErrorResponse{
+	encodeErr := json.NewEncoder(response).Encode(resolutionCreateErrorResponse{
 		Error: resolutionCreateErrorDetail{Code: code, Message: message, Retryable: retryable},
-	}); err != nil {
+	})
+	if encodeErr != nil {
 		return
 	}
 }

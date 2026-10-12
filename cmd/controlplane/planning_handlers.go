@@ -155,9 +155,10 @@ func (body plannedTaskBody) task() collector.Task {
 func writePlanningError(response http.ResponseWriter, status int, code string) {
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
-	if err := json.NewEncoder(response).Encode(struct {
+	encodeErr := json.NewEncoder(response).Encode(struct {
 		Code string `json:"code"`
-	}{Code: code}); err != nil {
+	}{Code: code})
+	if encodeErr != nil {
 		return
 	}
 }

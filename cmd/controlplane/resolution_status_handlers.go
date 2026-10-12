@@ -108,7 +108,7 @@ func (a *resolutionStatusAPI) get(response http.ResponseWriter, request *http.Re
 
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(response).Encode(resolutionStatusResponse{
+	encodeErr := json.NewEncoder(response).Encode(resolutionStatusResponse{
 		SchemaVersion: resolutionStatusSchemaVersion,
 		ResolutionID:  status.ID,
 		State:         status.State,
@@ -117,7 +117,8 @@ func (a *resolutionStatusAPI) get(response http.ResponseWriter, request *http.Re
 		Version:       status.Version,
 		CreatedAt:     status.CreatedAt.UTC(),
 		UpdatedAt:     status.UpdatedAt.UTC(),
-	}); err != nil {
+	})
+	if encodeErr != nil {
 		a.logger.ErrorContext(request.Context(), "encode resolution status failed", "error", err)
 	}
 }
@@ -133,9 +134,10 @@ func writeResolutionStatusError(response http.ResponseWriter, status int, code s
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
-	if err := json.NewEncoder(response).Encode(struct {
+	encodeErr := json.NewEncoder(response).Encode(struct {
 		Code string `json:"code"`
-	}{Code: code}); err != nil {
+	}{Code: code})
+	if encodeErr != nil {
 		return
 	}
 }

@@ -85,13 +85,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	store := collector.NewStore()
-	if err := store.Add(collector.Task{
+	addErr := store.Add(collector.Task{
 		ID: *taskID, TenantID: "tenant-local", ResolutionID: "resolution-local", ClaimFingerprint: "claim-local",
 		TargetSnapshotID: "snapshot-local", TargetSnapshotHash: "sha256:local",
 		TargetID: *targetID, RecipeID: *recipeID, RecipeVersion: *recipeVersion,
 		TriggerDecisionID: "trigger-local", PlanningDecisionID: "planning-local",
 		CompatibilityHash: "compatibility-local",
-	}); err != nil {
+	})
+	if addErr != nil {
 		fmt.Fprintf(stderr, "queue task: %v\n", err)
 		return 1
 	}
@@ -147,10 +148,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "read task result: %v\n", err)
 		return 1
 	}
-	if err := json.NewEncoder(stdout).Encode(result{
+	encodeErr := json.NewEncoder(stdout).Encode(result{
 		TaskID: task.ID, State: task.State, FencingToken: task.FencingToken,
 		AcceptedAttemptID: task.AcceptedAttemptID, AcceptedEvidenceID: task.AcceptedEvidenceID,
-	}); err != nil {
+	})
+	if encodeErr != nil {
 		fmt.Fprintf(stderr, "write task result: %v\n", err)
 		return 1
 	}
