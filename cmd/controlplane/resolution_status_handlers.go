@@ -119,7 +119,7 @@ func (a *resolutionStatusAPI) get(response http.ResponseWriter, request *http.Re
 		UpdatedAt:     status.UpdatedAt.UTC(),
 	})
 	if encodeErr != nil {
-		a.logger.ErrorContext(request.Context(), "encode resolution status failed", "error", err)
+		a.logger.ErrorContext(request.Context(), "encode resolution status failed", "error", encodeErr)
 	}
 }
 

@@ -154,7 +154,7 @@ func (a *resolutionCreateAPI) create(response http.ResponseWriter, request *http
 		State: result.Resolution.State, Version: result.Resolution.Version, Created: result.Created,
 	})
 	if encodeErr != nil {
-		a.logger.ErrorContext(request.Context(), "encode resolution creation response failed", "error", err)
+		a.logger.ErrorContext(request.Context(), "encode resolution creation response failed", "error", encodeErr)
 	}
 }
 

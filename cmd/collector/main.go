@@ -153,7 +153,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		AcceptedAttemptID: task.AcceptedAttemptID, AcceptedEvidenceID: task.AcceptedEvidenceID,
 	})
 	if encodeErr != nil {
-		fmt.Fprintf(stderr, "write task result: %v\n", err)
+		fmt.Fprintf(stderr, "write task result: %v\n", encodeErr)
 		return 1
 	}
 	return 0
