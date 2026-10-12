@@ -63,8 +63,8 @@ func Apply(ctx context.Context, database *sql.DB) (err error) {
 			checksum TEXT NOT NULL,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`)
-		if ledgerErr != nil {
-			return fmt.Errorf("create migration ledger: %w", ledgerErr)
+	if ledgerErr != nil {
+		return fmt.Errorf("create migration ledger: %w", ledgerErr)
 	}
 
 	files, err := fs.Glob(migrationFiles, "*.up.sql")
