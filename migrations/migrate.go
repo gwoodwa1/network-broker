@@ -56,14 +56,15 @@ func Apply(ctx context.Context, database *sql.DB) (err error) {
 		}
 	}()
 
-	if _, err := connection.ExecContext(ctx, `
+	_, ledgerErr := connection.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS broker_schema_migrations (
 			version BIGINT PRIMARY KEY,
 			name TEXT NOT NULL,
 			checksum TEXT NOT NULL,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-		)`); err != nil {
-		return fmt.Errorf("create migration ledger: %w", err)
+		)`)
+		if ledgerErr != nil {
+			return fmt.Errorf("create migration ledger: %w", ledgerErr)
 	}
 
 	files, err := fs.Glob(migrationFiles, "*.up.sql")
@@ -118,10 +119,11 @@ func applyFile(ctx context.Context, connection *sql.Conn, name string) (err erro
 	if _, err := transaction.ExecContext(ctx, string(contents)); err != nil {
 		return fmt.Errorf("apply migration %d: %w", version, err)
 	}
-	if _, err := transaction.ExecContext(ctx, `
+	_, recordErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_schema_migrations (version, name, checksum)
-		VALUES ($1, $2, $3)`, version, name, checksum); err != nil {
-		return fmt.Errorf("record migration %d: %w", version, err)
+		VALUES ($1, $2, $3)`, version, name, checksum)
+	if recordErr != nil {
+		return fmt.Errorf("record migration %d: %w", version, recordErr)
 	}
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit migration %d: %w", version, err)

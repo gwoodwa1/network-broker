@@ -142,9 +142,10 @@ func (e *BundleEngine) Evaluate(ctx context.Context, request EvaluationRequest) 
 	if bundleDigest != storedDigest {
 		return DecisionRecord{}, fmt.Errorf("policy bundle digest does not match stored provenance")
 	}
-	if err := e.verifier.Verify(ctx, bundle.SigningKeyRef, bundle.SignatureAlgorithm,
-		payload, bundle.Signature); err != nil {
-		return DecisionRecord{}, fmt.Errorf("verify policy bundle: %w", err)
+	verifyErr := e.verifier.Verify(ctx, bundle.SigningKeyRef, bundle.SignatureAlgorithm,
+		payload, bundle.Signature)
+	if verifyErr != nil {
+		return DecisionRecord{}, fmt.Errorf("verify policy bundle: %w", verifyErr)
 	}
 	rule, err := matchingRule(bundle.Rules, request.RecipeID, request.TargetClass)
 	if err != nil {

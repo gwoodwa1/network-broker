@@ -66,12 +66,14 @@ func TestSSHAdapterUsesCatalogueCommandAndOpaqueCredentialResolver(t *testing.T)
 		resolver.protocol != ProtocolSSH || captured.MediaType != "text/plain; charset=utf-8" {
 		t.Fatalf("SSH execution escaped catalogue boundary: command=%q captured=%q", dialer.command, captured.Payload)
 	}
-	if _, err := NewSSHAdapter([]SSHRecipe{{ID: "bad", Version: "v1", Command: "show clock\nreload"}},
-		resolver, dialer, time.Now); err == nil {
+	_, multilineCommandErr := NewSSHAdapter([]SSHRecipe{{ID: "bad", Version: "v1", Command: "show clock\nreload"}},
+		resolver, dialer, time.Now)
+	if multilineCommandErr == nil {
 		t.Fatal("expected multiline SSH command rejection")
 	}
-	if _, err := NewSSHAdapter([]SSHRecipe{{ID: "bad", Version: "v1", Command: "reload"}},
-		resolver, dialer, time.Now); err == nil {
+	_, nonReadOnlyCommandErr := NewSSHAdapter([]SSHRecipe{{ID: "bad", Version: "v1", Command: "reload"}},
+		resolver, dialer, time.Now)
+	if nonReadOnlyCommandErr == nil {
 		t.Fatal("expected non-read-only SSH command rejection")
 	}
 }
@@ -98,9 +100,10 @@ func TestNETCONFAdapterUsesReadOnlyCatalogueFilter(t *testing.T) {
 		captured.MediaType != "application/xml" {
 		t.Fatalf("NETCONF execution escaped catalogue boundary: filter=%q", dialer.filter)
 	}
-	if _, err := NewNETCONFAdapter([]NETCONFRecipe{{
+	_, framingErr := NewNETCONFAdapter([]NETCONFRecipe{{
 		ID: "bad", Version: "v1", Filter: `<interfaces>]]>]]></interfaces>`,
 	}}, resolver, dialer, time.Now); err == nil {
+	if framingErr == nil {
 		t.Fatal("expected NETCONF framing injection rejection")
 	}
 }

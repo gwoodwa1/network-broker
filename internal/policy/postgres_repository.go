@@ -74,29 +74,32 @@ func (r *PostgresBundleRepository) ActivateBundle(ctx context.Context, scope, bu
 		}
 	}()
 	var bundleScope string
-	if err := transaction.QueryRowContext(ctx, `
+	lookupErr := transaction.QueryRowContext(ctx, `
 		SELECT scope FROM broker_policy_bundles WHERE bundle_id = $1 AND version = $2`,
-		bundleID, version).Scan(&bundleScope); errors.Is(err, sql.ErrNoRows) {
+		bundleID, version).Scan(&bundleScope)
+	if errors.Is(lookupErr, sql.ErrNoRows) {
 		return ErrNoActiveBundle
-	} else if err != nil {
-		return fmt.Errorf("load policy bundle for activation: %w", err)
+	} else if lookupErr != nil {
+		return fmt.Errorf("load policy bundle for activation: %w", lookupErr)
 	}
 	if bundleScope != scope {
 		return fmt.Errorf("policy bundle scope does not match activation scope")
 	}
-	if _, err := transaction.ExecContext(ctx, `
+	_, activationErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_policy_activations (scope, bundle_id, version, activated_by)
 		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (scope) DO UPDATE SET
 			bundle_id = EXCLUDED.bundle_id, version = EXCLUDED.version,
 			activated_at = CURRENT_TIMESTAMP, activated_by = EXCLUDED.activated_by`,
-		scope, bundleID, version, actorID); err != nil {
-		return fmt.Errorf("activate policy bundle: %w", err)
+		scope, bundleID, version, actorID)
+	if activationErr != nil {
+		return fmt.Errorf("activate policy bundle: %w", activationErr)
 	}
-	if _, err := transaction.ExecContext(ctx, `
+	_, eventErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_policy_activation_events (scope, bundle_id, version, actor_id)
-		VALUES ($1, $2, $3, $4)`, scope, bundleID, version, actorID); err != nil {
-		return fmt.Errorf("record policy activation: %w", err)
+		VALUES ($1, $2, $3, $4)`, scope, bundleID, version, actorID)
+	if eventErr != nil {
+		return fmt.Errorf("record policy activation: %w", eventErr)
 	}
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit policy activation: %w", err)

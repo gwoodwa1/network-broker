@@ -69,11 +69,12 @@ func TestServiceTransitionsWithCompareAndSetAndOutbox(t *testing.T) {
 	if updated.State != ResolutionResolvingTargets || updated.Version != 2 || updated.Completed {
 		t.Fatalf("unexpected transition result: %+v", updated)
 	}
-	if _, err := service.Transition(context.Background(), TransitionRequest{
+	_, transitionErr := service.Transition(context.Background(), TransitionRequest{
 		TenantID: updated.TenantID, ResolutionID: updated.ID,
 		ExpectedVersion: 1, NextState: ResolutionPlanning,
-	}); !errors.Is(err, ErrVersionConflict) {
-		t.Fatalf("expected stale version rejection, got %v", err)
+	})
+	if !errors.Is(transitionErr, ErrVersionConflict) {
+		t.Fatalf("expected stale version rejection, got %v", transitionErr)
 	}
 	if events := repository.PendingEvents(10); len(events) != 2 || events[1].Type != "resolution.state_changed" {
 		t.Fatalf("expected atomic transition event, got %+v", events)
@@ -98,11 +99,12 @@ func TestMemoryRepositoryListsSafeVersionCursorEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Transition(context.Background(), TransitionRequest{
+	_, transitionErr := service.Transition(context.Background(), TransitionRequest{
 		TenantID: created.Resolution.TenantID, ResolutionID: created.Resolution.ID,
 		ExpectedVersion: 1, NextState: ResolutionResolvingTargets,
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if transitionErr != nil {
+		t.Fatal(transitionErr)
 	}
 	events, err := repository.ListEvents(context.Background(), created.Resolution.TenantID,
 		created.Resolution.ID, 0, 10)
@@ -118,9 +120,10 @@ func TestMemoryRepositoryListsSafeVersionCursorEvents(t *testing.T) {
 	if err != nil || len(after) != 1 || after[0].Cursor != 2 {
 		t.Fatalf("unexpected cursor result: events=%+v error=%v", after, err)
 	}
-	if _, err := repository.ListEvents(context.Background(), "tenant-other",
-		created.Resolution.ID, 0, 10); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected tenant-scoped not found, got %v", err)
+	_, listErr := repository.ListEvents(context.Background(), "tenant-other",
+		created.Resolution.ID, 0, 10)
+	if !errors.Is(listErr, ErrNotFound) {
+		t.Fatalf("expected tenant-scoped not found, got %v", listErr)
 	}
 }
 
@@ -132,8 +135,9 @@ func TestMemoryRepositoryFailsClosedOnMalformedResolutionEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository.events[0].Payload = []byte(`{"schema_version":"v1","state":"received","version":"bad"}`)
-	if _, err := repository.ListEvents(context.Background(), created.Resolution.TenantID,
-		created.Resolution.ID, 0, 10); err == nil {
+	_, listErr := repository.ListEvents(context.Background(), created.Resolution.TenantID,
+		created.Resolution.ID, 0, 10)
+	if listErr == nil {
 		t.Fatal("expected malformed durable event to fail closed")
 	}
 }

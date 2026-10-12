@@ -44,7 +44,7 @@ func (r *PostgresRepository) Create(ctx context.Context, resolution Resolution, 
 		}
 	}()
 
-	if _, err := transaction.ExecContext(ctx, `
+	_, insertErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_resolutions (
 			id, actor_id, tenant_id, idempotency_key, request_digest, request_document, state,
 			target_count, completed, version, created_at, updated_at
@@ -53,8 +53,9 @@ func (r *PostgresRepository) Create(ctx context.Context, resolution Resolution, 
 		resolution.RequestDigest, resolution.RequestDocument, resolution.State,
 		resolution.TargetCount, resolution.Completed,
 		resolution.Version, resolution.CreatedAt, resolution.UpdatedAt,
-	); err != nil {
-		return Resolution{}, false, fmt.Errorf("insert resolution: %w", err)
+	)
+	if insertErr != nil {
+		return Resolution{}, false, fmt.Errorf("insert resolution: %w", insertErr)
 	}
 
 	result, err := transaction.ExecContext(ctx, `
@@ -258,13 +259,14 @@ func getResolutionTx(ctx context.Context, transaction *sql.Tx, tenantID, resolut
 
 func getIdempotentResolution(ctx context.Context, transaction *sql.Tx, tenantID, actorID, key string) (Resolution, string, error) {
 	var digest, resolutionID string
-	if err := transaction.QueryRowContext(ctx, `
+	scanErr := transaction.QueryRowContext(ctx, `
 		SELECT request_digest, resolution_id
 		FROM broker_resolution_idempotency
 		WHERE tenant_id = $1 AND actor_id = $2 AND idempotency_key = $3`,
 		tenantID, actorID, key,
-	).Scan(&digest, &resolutionID); err != nil {
-		return Resolution{}, "", fmt.Errorf("get resolution idempotency record: %w", err)
+	).Scan(&digest, &resolutionID)
+	if scanErr != nil {
+		return Resolution{}, "", fmt.Errorf("get resolution idempotency record: %w", scanErr)
 	}
 	resolution, err := getResolutionTx(ctx, transaction, tenantID, resolutionID)
 	if err != nil {
@@ -275,14 +277,15 @@ func getIdempotentResolution(ctx context.Context, transaction *sql.Tx, tenantID,
 }
 
 func insertOutboxEvent(ctx context.Context, transaction *sql.Tx, event outbox.Event) error {
-	if _, err := transaction.ExecContext(ctx, `
+	_, insertErr := transaction.ExecContext(ctx, `
 		INSERT INTO broker_outbox (
 			id, tenant_id, aggregate_type, aggregate_id, event_type, payload, occurred_at, available_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
 		event.ID, event.TenantID, event.AggregateType, event.AggregateID,
 		event.Type, string(event.Payload), event.OccurredAt,
-	); err != nil {
-		return fmt.Errorf("insert resolution outbox event: %w", err)
+	)
+	if insertErr != nil {
+		return fmt.Errorf("insert resolution outbox event: %w", insertErr)
 	}
 
 	return nil

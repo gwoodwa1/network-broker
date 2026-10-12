@@ -185,12 +185,13 @@ func validateNewResolution(resolution Resolution, event outbox.Event) error {
 	if resolution.ID == "" {
 		return fmt.Errorf("resolution id is required")
 	}
-	if err := validateCreateRequest(CreateRequest{
+	validationErr := validateCreateRequest(CreateRequest{
 		ActorID: resolution.ActorID, TenantID: resolution.TenantID,
 		IdempotencyKey: resolution.IdempotencyKey, RequestDigest: resolution.RequestDigest,
 		RequestDocument: resolution.RequestDocument,
-	}); err != nil {
-		return err
+	})
+	if validationErr != nil {
+		return validationErr
 	}
 	if resolution.State != ResolutionReceived || resolution.Version != 1 || resolution.Completed {
 		return fmt.Errorf("new resolution must be active in received state at version 1")
