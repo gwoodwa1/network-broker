@@ -93,7 +93,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		CompatibilityHash: "compatibility-local",
 	})
 	if addErr != nil {
-		fmt.Fprintf(stderr, "queue task: %v\n", err)
+		fmt.Fprintf(stderr, "queue task: %v\n", addErr)
 		return 1
 	}
 	_, private, err := ed25519.GenerateKey(nil)

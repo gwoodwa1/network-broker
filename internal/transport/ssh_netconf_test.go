@@ -102,7 +102,7 @@ func TestNETCONFAdapterUsesReadOnlyCatalogueFilter(t *testing.T) {
 	}
 	_, framingErr := NewNETCONFAdapter([]NETCONFRecipe{{
 		ID: "bad", Version: "v1", Filter: `<interfaces>]]>]]></interfaces>`,
-	}}, resolver, dialer, time.Now); err == nil {
+	}}, resolver, dialer, time.Now)
 	if framingErr == nil {
 		t.Fatal("expected NETCONF framing injection rejection")
 	}
