@@ -129,12 +129,13 @@ func (r *PostgresConsumptionRepository) Consume(ctx context.Context,
 	}()
 
 	var alreadyConsumed bool
-	if err := transaction.QueryRowContext(ctx, `
+	existsErr := transaction.QueryRowContext(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM broker_execution_grant_consumptions
 			WHERE grant_id = $1 OR nonce_digest = $2
-		)`, consumption.GrantID, consumption.NonceDigest).Scan(&alreadyConsumed); err != nil {
-		return ConsumptionRecord{}, fmt.Errorf("check execution grant consumption: %w", err)
+		)`, consumption.GrantID, consumption.NonceDigest).Scan(&alreadyConsumed)
+	if existsErr != nil {
+		return ConsumptionRecord{}, fmt.Errorf("check execution grant consumption: %w", existsErr)
 	}
 	if alreadyConsumed {
 		return ConsumptionRecord{}, ErrAlreadyConsumed
@@ -163,11 +164,12 @@ func (r *PostgresConsumptionRepository) Consume(ctx context.Context,
 	if rows != 1 {
 		return ConsumptionRecord{}, ErrAlreadyConsumed
 	}
-	if err := transaction.QueryRowContext(ctx, `
+	scanErr := transaction.QueryRowContext(ctx, `
 		SELECT consumed_at FROM broker_execution_grant_consumptions
 		WHERE tenant_id = $1 AND grant_id = $2`, consumption.TenantID,
-		consumption.GrantID).Scan(&record.ConsumedAt); err != nil {
-		return ConsumptionRecord{}, fmt.Errorf("read execution grant consumption time: %w", err)
+		consumption.GrantID).Scan(&record.ConsumedAt)
+	if scanErr != nil {
+		return ConsumptionRecord{}, fmt.Errorf("read execution grant consumption time: %w", scanErr)
 	}
 	if err := transaction.Commit(); err != nil {
 		return ConsumptionRecord{}, fmt.Errorf("commit execution grant consumption: %w", err)

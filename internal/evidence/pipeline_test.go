@@ -187,9 +187,10 @@ func TestPipelineSinkNormalisesCapturedGNMIResponseBeforeStrictParsing(t *testin
 	if err := tasks.StartExecution(task.ID, lease.Owner, lease.FencingToken, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := tasks.RecordExecutionAuthority(task.ID, lease.Owner, lease.FencingToken,
-		"execution-1", "grant-1", now); err != nil {
-		t.Fatal(err)
+	authorityErr := tasks.RecordExecutionAuthority(task.ID, lease.Owner, lease.FencingToken,
+		"execution-1", "grant-1", now)
+	if authorityErr != nil {
+		t.Fatal(authorityErr)
 	}
 	task, err = tasks.Get(task.ID)
 	if err != nil {

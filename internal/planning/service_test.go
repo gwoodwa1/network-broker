@@ -58,20 +58,22 @@ func TestQueueRejectsMissingScopeAndTenantOverride(t *testing.T) {
 	}
 	actor := planningActor()
 	actor.AllowedScopes = nil
-	if _, err := service.Queue(context.Background(), actor, QueueRequest{
+	_, queueErr := service.Queue(context.Background(), actor, QueueRequest{
 		ResolutionID: "resolution-1", ExpectedResolutionVersion: 1,
 		Tasks: []collector.Task{plannedTask()},
-	}); !errors.Is(err, ErrDenied) {
-		t.Fatalf("expected denied planner, got %v", err)
+	})
+	if !errors.Is(queueErr, ErrDenied) {
+		t.Fatalf("expected denied planner, got %v", queueErr)
 	}
 	actor = planningActor()
 	task := plannedTask()
 	task.TenantID = "tenant-b"
-	if _, err := service.Queue(context.Background(), actor, QueueRequest{
+	_, tenantOverrideErr := service.Queue(context.Background(), actor, QueueRequest{
 		ResolutionID: "resolution-1", ExpectedResolutionVersion: 1,
 		Tasks: []collector.Task{task},
-	}); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("expected tenant override rejection, got %v", err)
+	})
+	if !errors.Is(tenantOverrideErr, ErrInvalidRequest) {
+		t.Fatalf("expected tenant override rejection, got %v", tenantOverrideErr)
 	}
 }
 

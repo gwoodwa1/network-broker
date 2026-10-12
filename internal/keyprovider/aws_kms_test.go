@@ -68,9 +68,10 @@ func TestKMSSigningProviderResolvesAliasToImmutableARNAndUsesDigest(t *testing.T
 		client.lastSign.MessageType != types.MessageTypeDigest {
 		t.Fatalf("KMS signing did not receive a SHA-256 digest: %+v", client.lastSign)
 	}
-	if err := provider.Verify(context.Background(), key.Reference, key.Algorithm,
-		[]byte("evidence"), signature); err != nil {
-		t.Fatal(err)
+	verifyErr := provider.Verify(context.Background(), key.Reference, key.Algorithm,
+		[]byte("evidence"), signature)
+	if verifyErr != nil {
+		t.Fatal(verifyErr)
 	}
 	rotatedARN := "arn:aws:kms:eu-west-2:123456789012:key/signing-v2"
 	client.descriptions["alias/evidence"] = &types.KeyMetadata{
@@ -84,9 +85,10 @@ func TestKMSSigningProviderResolvesAliasToImmutableARNAndUsesDigest(t *testing.T
 	if rotated.Reference != rotatedARN || key.Reference == rotated.Reference {
 		t.Fatalf("KMS alias rotation did not resolve to a new immutable ARN: before=%+v after=%+v", key, rotated)
 	}
-	if err := provider.Verify(context.Background(), key.Reference, key.Algorithm,
-		[]byte("evidence"), signature); err != nil {
-		t.Fatalf("historical ARN did not remain verifiable after alias rotation: %v", err)
+	historicalVerifyErr := provider.Verify(context.Background(), key.Reference, key.Algorithm,
+		[]byte("evidence"), signature)
+	if historicalVerifyErr != nil {
+		t.Fatalf("historical ARN did not remain verifiable after alias rotation: %v", historicalVerifyErr)
 	}
 }
 

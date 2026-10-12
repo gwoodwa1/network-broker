@@ -87,8 +87,9 @@ func TestDeliverRejectsDecisionUsedByAnotherActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := service.Deliver(decision.DecisionID, "actor-b", "tenant-a", "evidence-1", "request-1", "normalised",
-		map[string]string{"operational_state": "up"}, nil); err == nil {
+	_, _, deliveryErr := service.Deliver(decision.DecisionID, "actor-b", "tenant-a", "evidence-1", "request-1", "normalised",
+		map[string]string{"operational_state": "up"}, nil)
+	if deliveryErr == nil {
 		t.Fatal("expected cross-actor decision reuse to be rejected")
 	}
 }

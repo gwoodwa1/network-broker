@@ -176,8 +176,9 @@ func (a *Assembler) VerifyContext(ctx context.Context, envelope EvidenceEnvelope
 	if err != nil {
 		return err
 	}
-	if err := a.signing.Verify(ctx, envelope.Attribution.SigningKeyRef,
-		envelope.Attribution.SignatureAlgorithm, payload, envelope.Attribution.Signature); err != nil {
+	verifyErr := a.signing.Verify(ctx, envelope.Attribution.SigningKeyRef,
+		envelope.Attribution.SignatureAlgorithm, payload, envelope.Attribution.Signature)
+	if verifyErr != nil {
 		return fmt.Errorf("evidence envelope signature is invalid")
 	}
 	return nil

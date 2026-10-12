@@ -45,11 +45,12 @@ func (r *PostgresRepository) List(ctx context.Context, tenantID string, beforeSe
 	}()
 	for rows.Next() {
 		var entry Entry
-		if err := rows.Scan(
+		scanErr := rows.Scan(
 			&entry.Sequence, &entry.EventID, &entry.AggregateType, &entry.AggregateID,
 			&entry.EventType, &entry.OccurredAt, &entry.Attempts, &entry.DeadLetteredAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan dead-lettered event: %w", err)
+		)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan dead-lettered event: %w", scanErr)
 		}
 		entries = append(entries, entry)
 	}
@@ -119,19 +120,20 @@ func (r *PostgresRepository) Replay(ctx context.Context, command ReplayCommand) 
 	var eventID, lastError string
 	var attempts int
 	var priorDeadLetteredAt time.Time
-	if err := transaction.QueryRowContext(ctx, `
+	scanErr := transaction.QueryRowContext(ctx, `
 		SELECT sequence, id, dead_lettered_at, attempts, COALESCE(last_error, '')
 		FROM broker_outbox
 		WHERE tenant_id = $1 AND id = $2 AND published_at IS NULL AND dead_lettered_at IS NOT NULL
 		FOR UPDATE`, command.TenantID, command.EventID,
-	).Scan(&sequence, &eventID, &priorDeadLetteredAt, &attempts, &lastError); errors.Is(err, sql.ErrNoRows) {
+	).Scan(&sequence, &eventID, &priorDeadLetteredAt, &attempts, &lastError)
+	if errors.Is(scanErr, sql.ErrNoRows) {
 		return ReplayResult{}, ErrNotFound
-	} else if err != nil {
-		return ReplayResult{}, fmt.Errorf("lock dead-lettered event: %w", err)
+	} else if scanErr != nil {
+		return ReplayResult{}, fmt.Errorf("lock dead-lettered event: %w", scanErr)
 	}
 
 	result = ReplayResult{ActionID: command.ActionID, EventID: eventID, Replayed: true}
-	if err := transaction.QueryRowContext(ctx, `
+	insertErr := transaction.QueryRowContext(ctx, `
 		INSERT INTO broker_dead_letter_actions (
 			action_id, tenant_id, outbox_sequence, event_id, actor_id, spiffe_id,
 			identity_revision, action, idempotency_key, reason, prior_dead_lettered_at,
@@ -141,8 +143,9 @@ func (r *PostgresRepository) Replay(ctx context.Context, command ReplayCommand) 
 		command.ActionID, command.TenantID, sequence, eventID, command.ActorID, command.SPIFFEID,
 		command.IdentityRevision, command.IdempotencyKey, command.Reason, priorDeadLetteredAt,
 		attempts, lastError,
-	).Scan(&result.RequestedAt, &result.AvailableAt); err != nil {
-		return ReplayResult{}, fmt.Errorf("insert dead-letter replay audit: %w", err)
+	).Scan(&result.RequestedAt, &result.AvailableAt)
+	if insertErr != nil {
+		return ReplayResult{}, fmt.Errorf("insert dead-letter replay audit: %w", insertErr)
 	}
 	update, err := transaction.ExecContext(ctx, `
 		UPDATE broker_outbox

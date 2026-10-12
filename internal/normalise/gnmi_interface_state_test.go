@@ -87,9 +87,10 @@ func TestScalarJSONStringRejectsTrailingOrStructuredContent(t *testing.T) {
 	for _, payload := range [][]byte{
 		[]byte(`"UP" {}`), []byte(`{"state":"UP"}`), []byte(`"UP" trailing`),
 	} {
-		if _, err := scalarString(&gpb.TypedValue{
+		_, scalarErr := scalarString(&gpb.TypedValue{
 			Value: &gpb.TypedValue_JsonIetfVal{JsonIetfVal: payload},
-		}); err == nil {
+		})
+		if scalarErr == nil {
 			t.Fatalf("expected invalid JSON scalar to fail: %s", payload)
 		}
 	}

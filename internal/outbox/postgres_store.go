@@ -74,11 +74,12 @@ func (s *PostgresStore) Claim(ctx context.Context, owner string, limit int, now 
 	}()
 	for rows.Next() {
 		var record Record
-		if err := rows.Scan(
+		scanErr := rows.Scan(
 			&record.Sequence, &record.ID, &record.TenantID, &record.AggregateType,
 			&record.AggregateID, &record.Type, &record.Payload, &record.OccurredAt, &record.Attempts,
-		); err != nil {
-			return nil, fmt.Errorf("scan claimed outbox event: %w", err)
+		)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan claimed outbox event: %w", scanErr)
 		}
 		records = append(records, record)
 	}

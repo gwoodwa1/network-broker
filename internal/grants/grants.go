@@ -216,15 +216,16 @@ func (a *Authority) ExchangeContext(ctx context.Context, grant ExecutionGrant,
 	}
 	nonceDigest := sha256.Sum256([]byte(grant.Nonce))
 	grantDigest := sha256.Sum256(grantDocument)
-	if _, err := a.consumptions.Consume(ctx, Consumption{
+	_, consumeErr := a.consumptions.Consume(ctx, Consumption{
 		GrantID: grant.GrantID, NonceDigest: hex.EncodeToString(nonceDigest[:]),
 		GrantDigest: hex.EncodeToString(grantDigest[:]), TenantID: grant.TenantID,
 		TaskID: grant.TaskID, CollectorSPIFFEID: grant.CollectorSPIFFEID,
 		TargetID: grant.TargetID, RecipeID: grant.RecipeID, RecipeVersion: grant.RecipeVersion,
 		FencingToken: grant.FencingToken, GrantExpiresAt: grant.ExpiresAt,
 		RequestedAt: request.Now,
-	}); err != nil {
-		return SessionCredential{}, err
+	})
+	if consumeErr != nil {
+		return SessionCredential{}, consumeErr
 	}
 	return SessionCredential{
 		Token: hex.EncodeToString(tokenBytes), GrantID: grant.GrantID,
