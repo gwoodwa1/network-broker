@@ -136,7 +136,7 @@ jobs:
           repo-checkout: false
           # The action defaults go-version-input to "stable", which takes
           # precedence over go-version-file. Pin the exact CI patch release.
-          go-version-input: '1.27.2'
+          go-version-input: '1.27.3'
           go-package: ./...
           cache: false
 
